@@ -1,0 +1,35 @@
+# KB agent ignore patterns
+# Common directories
+node_modules/
+.vscode/
+.env
+.venv/
+venv/
+build/
+dist/
+target/
+bin/
+obj/
+__pycache__/
+
+# Common files
+*.lock
+*.log
+*.sqlite
+*.db
+*.pyc
+
+# Generated/build artifacts
+coverage/
+.coverage
+reports/
+docs/kb/   # exclude generated KB output if you don't want scanner to pick it up
+
+# IDE/project files
+*.suo
+*.user
+*.sln
+*.csproj.user
+
+# Optional: add repository-specific patterns below
+# example: vendor/, third_party/

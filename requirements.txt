@@ -1,0 +1,12 @@
+typer
+tree_sitter
+sentence-transformers
+faiss-cpu
+fastapi
+uvicorn
+python-dotenv
+openai
+gitpython
+pydantic
+requests
+regex
