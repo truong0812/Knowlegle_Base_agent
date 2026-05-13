@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
+*.sln
+*.csproj.user
+
+# Environment
+.env
+.env.local
+
+# Claude Code
+.claude/
+
+# KB output (generated)
+.kb/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log

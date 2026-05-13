@@ -1,66 +1,116 @@
-# Knowlegle Base Agent — MVP
+# Knowledge Base Agent
 
-Tổng quan
-- Mục tiêu: chuyển toàn bộ mã nguồn (src) của một repository đa-ngôn ngữ thành tập tài liệu Markdown (human+agent readable) theo workflow: architecture → module → class → method.
-- Đầu ra: cây Markdown trong docs/kb/ + sidecar JSON metadata (.kb/metadata/) + optional vector index.
+**Codebase → Structured Knowledge Base**, phục vụ các AI agent khác tra cứu và reasoning về code.
 
-MVP scope
-- Input: toàn bộ thư mục src của repo.
-- Ngôn ngữ MVP: Python, JavaScript/TypeScript, Java.
-- Output cơ bản: README-like docs (architecture.md, modules, classes, methods) với YAML front-matter (metadata) cho mỗi MD.
-- Orchestration: pipeline dạng workflow (CrewAI / task-runner) với sub-agents: scanner, language-detector, parser/extractor, summarizer, md-generator, indexer, ci-agent.
+## Vấn đề
 
-Quick start (local, MVP)
-Prereqs (MVP)
-- Python 3.10+
-- pip
-- git
-- (Optional) Docker, Node.js
+Khi một AI agent cần hiểu codebase (ví dụ: code review agent, debugging agent, onboarding agent), nó phải tự đọc và phân tích source code — tốn context, dễ sai, không tái sử dụng được.
 
-Suggested local steps (MVP)
-1. Clone repo containing this agent.
-2. Create virtualenv và cài dependencies:
-   python -m venv .venv && .venv\Scripts\activate
-   pip install -r requirements.txt
-3. Chạy scan thử (CLI stub):
-   kb-agent scan --repo /path/to/repo --out docs/kb
-(Chi tiết CLI & configs sẽ có trong docs/MVP.md)
+**Knowledge Base Agent** giải quyết bằng cách **phân tích codebase một lần, sinh ra knowledge base có cấu trúc** mà các agent khác có thể query.
 
-Output layout (MVP)
-- docs/kb/
-  - architecture.md
-  - modules/<module>.md
-  - classes/<class>.md
-  - methods/<method>.md
-- .kb/metadata/<relative-path>.json
-- .kb/index/faiss.index (optional)
+## Cách tiếp cận: Layered Analysis
 
-Schema tóm tắt
-- MD front-matter (YAML) gồm:
-  - id, kind (architecture/module/class/method), language, path, signature, summary, tags, source_commit, tests, links, confidence
-- Sidecar JSON: đầy đủ provenance, parse evidence, embeddings ref
+Thay vì ném toàn bộ codebase vào LLM (→ hallucination), agent phân tích theo **3 layer**, mỗi layer có context giới hạn và kết quả layer trên làm input cho layer dưới:
 
-Tech stack (MVP)
-- Orchestration: CrewAI (hoặc Prefect/Temporal as alternative)
-- Language detection & parsing: GitHub Linguist heuristics + tree-sitter
-- Summarization: LLM (OpenAI / local Llama2) với prompt templates
-- Embeddings: OpenAI embeddings or sentence-transformers; index: FAISS (local) or Pinecone
-- Storage: docs/kb in repo + .kb sidecar folder
-- Runtime: Python for core workers; containerized workers for scale
-- CI: GitHub Actions (diff-trigger → run pipeline → open PR with docs changes)
+```
+Layer 1 — Architecture (repo-level)
+  Input: folder structure, manifests, file list
+  Output: packages, entry points, module dependency map
 
-Quality & safety notes
-- Exclude generated/vendor code by patterns
-- Mark low-confidence items for manual triage
-- Cache LLM outputs and batch calls to reduce cost
-- Optionally run compiled examples/tests to ground summaries
+Layer 2 — Module (file/folder-level)
+  Input: source code của 1 module + kết quả Layer 1
+  Output: public API surface (classes, interfaces, exports)
 
-Where to find detailed design
-- See docs/MVP.md for data contracts, task message schemas, example MD, and MVP roadmap.
+Layer 3 — Unit/Member (class/function-level)
+  Input: 1 class/function + kết quả Layer 2
+  Output: signature, behavior, summary
+```
 
-Contributing
-- Add issues for missing language support or failing parsers.
-- Follow code style and add tests for extractors.
+Mỗi entry trong KB tách rõ nguồn dữ liệu:
 
-License
-- MIT (or adjust to your preferred license)
+- **`static`**: đến từ parser (AST) — deterministic, có thể verify tự động
+- **`ai`**: đến từ LLM — cần confidence score, có thể review
+
+## Ngôn ngữ MVP
+
+| Ngôn ngữ | Parser | Lý do chọn |
+|---|---|---|
+| **Python** | `ast` + tree-sitter | Built-in AST, dễ bắt đầu |
+| **C#** | tree-sitter | Ngôn ngữ enterprise phổ biến |
+| **C++** | tree-sitter | Hard case — validate thiết kế |
+
+## Output
+
+```
+.kb/
+├── entries/                    # JSON entries, mỗi symbol 1 file
+│   ├── arch.myapp.json
+│   ├── mod.myapp.services.json
+│   └── mem.myapp.services.userservice.createuser.json
+├── index/                      # FAISS vector index
+│   └── faiss.index
+└── manifest.json               # Metadata toàn KB
+```
+
+Mỗi entry có schema:
+
+```json
+{
+  "id": "myapp.services.userservice.createuser",
+  "layer": "member",
+  "parent": "myapp.services.userservice",
+
+  "static": {
+    "signature": "public User CreateUser(string name, string email)",
+    "path": "src/Services/UserService.cs",
+    "language": "csharp",
+    "line_start": 45,
+    "line_end": 62,
+    "kind": "method",
+    "modifiers": ["public", "async"],
+    "parameters": [
+      {"name": "name", "type": "string"},
+      {"name": "email", "type": "string"}
+    ],
+    "return_type": "User"
+  },
+
+  "ai": {
+    "summary": "Creates a new user with validation and sends welcome email",
+    "purpose": "Entry point for user registration flow",
+    "behavior": ["Validate input", "Check duplicate email", "Persist user", "Send welcome email"],
+    "tags": ["user-management", "registration"],
+    "confidence": 0.85
+  }
+}
+```
+
+## Quick Start
+
+```bash
+python -m venv .venv && source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+
+# Analyze a repository
+kb-agent analyze --repo /path/to/repo --out .kb
+
+# Query the knowledge base
+kb-agent query "How does user registration work?"
+```
+
+## Đánh giá chất lượng
+
+| Metric | Cách đo | Mục tiêu |
+|---|---|---|
+| Coverage | % symbols parse thành công | ≥ 90% |
+| Signature accuracy | KB signature vs actual code | ≥ 95% |
+| Consistency | Parent-child đúng hierarchy | 100% |
+| Hallucination rate | Random sample, human check | ≤ 5% |
+
+## Trạng thái dự án
+
+**Pre-MVP** — đang thiết kế. Xem chi tiết tại [docs/MVP.md](docs/MVP.md).
+
+## License
+
+MIT
