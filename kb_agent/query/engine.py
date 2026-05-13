@@ -1,0 +1,68 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+
+from kb_agent.models.entry import KBEntry
+
+
+class QueryEngine:
+    """Load FAISS index and query entries by semantic similarity."""
+
+    def __init__(self, kb_dir: Path, model_name: str = "all-MiniLM-L6-v2") -> None:
+        self._kb_dir = kb_dir.resolve()
+        self._model_name = model_name
+        self._model = None
+        self._index = None
+        self._id_map: list[str] = []
+
+    def _get_model(self):
+        if self._model is None:
+            from sentence_transformers import SentenceTransformer
+            self._model = SentenceTransformer(self._model_name)
+        return self._model
+
+    def _load(self) -> None:
+        if self._index is not None:
+            return
+
+        import faiss
+
+        index_path = self._kb_dir / "index" / "faiss.index"
+        id_map_path = self._kb_dir / "index" / "id_map.json"
+
+        if not index_path.exists():
+            raise FileNotFoundError(f"Index not found at {index_path}")
+
+        self._index = faiss.read_index(str(index_path))
+        self._id_map = json.loads(id_map_path.read_text(encoding="utf-8"))
+
+    def query(self, question: str, top_k: int = 5) -> list[KBEntry]:
+        self._load()
+
+        model = self._get_model()
+        q_vec = model.encode([question], show_progress_bar=False)
+        q_vec_np = np.array(q_vec, dtype=np.float32)
+
+        scores, indices = self._index.search(q_vec_np, min(top_k, len(self._id_map)))
+
+        entries: list[KBEntry] = []
+        for idx in indices[0]:
+            if idx < 0:
+                continue
+            entry_id = self._id_map[idx]
+            entry = self._load_entry(entry_id)
+            if entry:
+                entries.append(entry)
+
+        return entries
+
+    def _load_entry(self, entry_id: str) -> KBEntry | None:
+        filename = entry_id.replace(".", "_") + ".json"
+        path = self._kb_dir / "entries" / filename
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return KBEntry(**data)
