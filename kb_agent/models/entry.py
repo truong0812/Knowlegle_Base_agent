@@ -40,6 +40,7 @@ class StaticData(BaseModel):
 
     kind: SymbolKind
     language: Language
+    languages: list[Language] = Field(default_factory=list)
     path: str
     line_start: int
     line_end: int

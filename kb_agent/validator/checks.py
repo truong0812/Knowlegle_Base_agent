@@ -4,9 +4,14 @@ from kb_agent.models.entry import KBEntry, Layer
 from kb_agent.models.report import CheckResult
 
 
-def check_parent_consistency(entries: list[KBEntry]) -> CheckResult:
+def check_parent_consistency(
+    entries: list[KBEntry],
+    entry_map: dict[str, KBEntry] | None = None,
+) -> CheckResult:
     """Every entry.parent must exist. Layer ordering must be arch > mod > mem."""
-    ids = {e.id for e in entries}
+    if entry_map is None:
+        entry_map = {e.id: e for e in entries}
+    ids = set(entry_map.keys())
     layer_order = {Layer.ARCH: 0, Layer.MOD: 1, Layer.MEM: 2}
     affected: list[str] = []
 
@@ -14,8 +19,7 @@ def check_parent_consistency(entries: list[KBEntry]) -> CheckResult:
         if entry.parent and entry.parent not in ids:
             affected.append(entry.id)
         if entry.parent:
-            # Find parent
-            parent = next((e for e in entries if e.id == entry.parent), None)
+            parent = entry_map.get(entry.parent)
             if parent and layer_order.get(entry.layer, 99) <= layer_order.get(parent.layer, 99):
                 affected.append(entry.id)
 

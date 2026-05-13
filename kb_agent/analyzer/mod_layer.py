@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import logging
+from collections import Counter
 from pathlib import Path
 
 from kb_agent.models.entry import AIData, KBEntry, Language, Layer, StaticData, SymbolKind
 from kb_agent.analyzer.llm import LLMClient
 from kb_agent.parser.base import ParseResult
 
+logger = logging.getLogger(__name__)
+
 MOD_SYSTEM_PROMPT = """You are analyzing a code module. Produce JSON with exactly these fields:
 - "summary": 1-2 sentences describing the module
 - "purpose": the module's purpose in the larger codebase
 - "tags": array of relevant tags
+- "confidence": number between 0.0 and 1.0 indicating how confident you are
 Respond ONLY with valid JSON."""
 
 MOD_USER_PROMPT = """Architecture context: {arch_summary}
@@ -45,10 +50,10 @@ class ModuleAnalyzer:
         for module_key, file_paths in modules.items():
             # Collect all symbols from this module
             all_symbols: list[str] = []
-            lang: Language | None = None
+            lang_counter: Counter[Language] = Counter()
             for fp in file_paths:
                 pr = parse_results[fp]
-                lang = pr.language
+                lang_counter[pr.language] += 1
                 for sym in pr.symbols:
                     all_symbols.append(f"  {sym.kind.value} {sym.name}")
 
@@ -66,10 +71,12 @@ class ModuleAnalyzer:
                         summary=result.get("summary"),
                         purpose=result.get("purpose"),
                         tags=result.get("tags", []),
-                        confidence=0.85,
+                        confidence=result.get("confidence", 0.5),
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Module LLM analysis failed for %s: %s", module_key, exc)
+
+            lang = lang_counter.most_common(1)[0][0] if lang_counter else Language.PYTHON
 
             entries.append(
                 KBEntry(
@@ -78,7 +85,7 @@ class ModuleAnalyzer:
                     parent="arch.root",
                     static=StaticData(
                         kind=SymbolKind.MODULE,
-                        language=lang or Language.PYTHON,
+                        language=lang,
                         path=module_key,
                         line_start=0,
                         line_end=0,

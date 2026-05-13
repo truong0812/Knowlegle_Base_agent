@@ -107,6 +107,27 @@ def validate(
 
 
 @app.command()
+def index(
+    kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
+    model: str = typer.Option("all-MiniLM-L6-v2", help="Embedding model name"),
+) -> None:
+    """Build or rebuild the FAISS vector index from existing KB entries."""
+    from kb_agent.indexer.indexer import KBIndexer
+    from kb_agent.validator.validator import KBValidator
+
+    kb = kb.resolve()
+    entries = KBValidator(kb)._load_entries()
+
+    if not entries:
+        typer.echo("No entries found. Run `analyze` first.")
+        raise typer.Exit(1)
+
+    indexer = KBIndexer(model_name=model)
+    indexer.build_index(entries, kb / "index")
+    typer.echo(f"Indexed {len(entries)} entries -> {kb / 'index'}")
+
+
+@app.command()
 def query(
     question: str = typer.Argument(help="Question to ask about the codebase"),
     kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),

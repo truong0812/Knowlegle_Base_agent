@@ -19,8 +19,9 @@ class KBValidator:
         if not entries:
             return QualityReport()
 
+        entry_map = {e.id: e for e in entries}
         checks: list[CheckResult] = [
-            check_parent_consistency(entries),
+            check_parent_consistency(entries, entry_map),
             check_orphan_entries(entries),
         ]
 

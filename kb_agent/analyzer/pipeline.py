@@ -56,6 +56,9 @@ class AnalysisPipeline:
 
         # 7. Write to disk
         manifest = self._write_entries(all_entries)
+
+        # 8. Build vector index
+        self._build_index(all_entries)
         return manifest
 
     def _parse_all(self, file_entries) -> dict[str, ParseResult]:
@@ -130,3 +133,15 @@ class AnalysisPipeline:
         )
 
         return manifest
+
+    def _build_index(self, entries: list[KBEntry]) -> None:
+        """Build FAISS vector index from entries. Skips if dependencies missing."""
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            from kb_agent.indexer.indexer import KBIndexer
+            indexer = KBIndexer()
+            indexer.build_index(entries, self._out_dir / "index")
+        except ImportError:
+            logger.info("Skipping index build — sentence-transformers/faiss not installed")

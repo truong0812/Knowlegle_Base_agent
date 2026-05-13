@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from kb_agent.models.entry import (
@@ -12,6 +13,8 @@ from kb_agent.models.entry import (
 )
 from kb_agent.analyzer.llm import LLMClient
 from kb_agent.parser.base import ParseResult
+
+logger = logging.getLogger(__name__)
 
 MEM_SYSTEM_PROMPT = """You are analyzing a single code symbol. Produce JSON with exactly these fields:
 - "summary": 1 sentence describing what this symbol does
@@ -72,8 +75,8 @@ class MemberAnalyzer:
                             tags=result.get("tags", []),
                             confidence=result.get("confidence", 0.5),
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.warning("Member LLM analysis failed for %s: %s", sym.name, exc)
 
                 entries.append(
                     KBEntry(
@@ -130,4 +133,4 @@ class MemberAnalyzer:
         parts.append(sym.name)
         base_id = ".".join(parts)
         # Append line number for dedup when same name appears multiple times
-        return f"{base_id}@{sym.line_start}"
+        return f"{base_id}_L{sym.line_start}"

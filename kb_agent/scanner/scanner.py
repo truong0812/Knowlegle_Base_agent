@@ -59,13 +59,17 @@ class FileScanner:
 
     def build_directory_tree(self) -> dict:
         """Return nested dict representing folder structure."""
-        tree: dict = {}
-        entries = self.scan()
-        for entry in entries:
-            parts = Path(entry.path).parent.parts
-            node = tree
-            for part in parts:
-                if part not in node:
-                    node[part] = {}
-                node = node[part]
-        return tree
+        return build_tree_from_entries(self.scan())
+
+
+def build_tree_from_entries(entries: list[FileEntry]) -> dict:
+    """Build nested dict folder tree from a list of file entries."""
+    tree: dict = {}
+    for entry in entries:
+        parts = Path(entry.path).parent.parts
+        node = tree
+        for part in parts:
+            if part not in node:
+                node[part] = {}
+            node = node[part]
+    return tree
