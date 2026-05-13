@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 
 class LLMClient:
@@ -18,7 +18,7 @@ class LLMClient:
     ) -> None:
         self._model = model
         self._cache_dir = cache_dir
-        self._client = OpenAI(api_key=api_key)
+        self._client = AsyncOpenAI(api_key=api_key)
 
     async def complete(self, system_prompt: str, user_prompt: str) -> dict:
         """Single LLM call with caching. Returns parsed JSON dict."""
@@ -28,7 +28,7 @@ class LLMClient:
         if cached is not None:
             return cached
 
-        response = self._client.chat.completions.create(
+        response = await self._client.chat.completions.create(
             model=self._model,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -46,8 +46,11 @@ class LLMClient:
     async def batch_complete(
         self, prompts: list[tuple[str, str]]
     ) -> list[dict]:
-        """Process multiple prompts sequentially (with caching)."""
-        return [await self.complete(sys_p, user_p) for sys_p, user_p in prompts]
+        """Process multiple prompts concurrently (with caching)."""
+        import asyncio
+        return await asyncio.gather(
+            *(self.complete(sys_p, user_p) for sys_p, user_p in prompts)
+        )
 
     def _cache_key(self, system_prompt: str, user_prompt: str) -> str:
         return hashlib.sha256(
