@@ -60,8 +60,8 @@ class PythonParser(BaseParser):
                     sym = self._extract_function(target)
                     sym.modifiers.append("decorated")
                     out.append(sym)
-            # Recurse into class bodies but limit depth
-            if depth < 2 and child.type in ("module", "block", "class_definition"):
+            # Recurse into module/block only (not class bodies — methods handled by _extract_class)
+            if depth < 2 and child.type in ("module", "block"):
                 self._walk_for_symbols(child, out, depth + 1)
 
     def _extract_class(self, node: Node) -> SymbolInfo:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -52,9 +53,9 @@ class FileScanner:
     def _walk(self):
         """Walk repo, skipping ignored directories."""
         ignore_dirs = DEFAULT_IGNORE_DIRS
-        for root, dirs, files in self._root.walk():
+        for root, dirs, files in os.walk(self._root):
             dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith(".")]
-            yield root, dirs, files
+            yield Path(root), dirs, files
 
     def build_directory_tree(self) -> dict:
         """Return nested dict representing folder structure."""
