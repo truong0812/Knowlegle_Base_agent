@@ -52,8 +52,8 @@ class MemberAnalyzer:
             mod_summary = mod_summaries.get(module_id or "", "")
 
             all_symbols = self._flatten_symbols(pr.symbols)
-            for sym in all_symbols:
-                entry_id = self._build_entry_id(sym, rel_path, module_id)
+            for sym, parent_name in all_symbols:
+                entry_id = self._build_entry_id(sym, rel_path, module_id, parent_name)
 
                 ai_data = AIData()
                 if self._llm and sym.signature:
@@ -98,25 +98,36 @@ class MemberAnalyzer:
 
         return entries
 
-    def _flatten_symbols(self, symbols: list) -> list:
-        """Flatten nested symbols (class children) into a flat list."""
-        flat: list = []
+    def _flatten_symbols(self, symbols: list) -> list[tuple]:
+        """Flatten nested symbols, tracking parent class name for children.
+        Top-level symbols get parent_name=None. Children get parent class name."""
+        flat: list[tuple] = []
         for sym in symbols:
-            flat.append(sym)
-            for child in sym.children:
-                flat.append(child)
+            if sym.children:
+                # Class/struct with children — emit the class itself + each child
+                flat.append((sym, None))
+                for child in sym.children:
+                    flat.append((child, sym.name))
+            else:
+                # Standalone function/symbol
+                flat.append((sym, None))
         return flat
 
     def _build_entry_id(
-        self, sym, rel_path: str, module_id: str | None
+        self, sym, rel_path: str, module_id: str | None, parent_name: str | None = None
     ) -> str:
-        """Construct dotted-path entry ID."""
+        """Construct dotted-path entry ID with dedup by line number."""
         parts = ["mem"]
         if module_id:
-            # mod.src -> src
             parts.append(module_id.replace("mod.", "", 1))
 
         path_stem = Path(rel_path).stem
         parts.append(path_stem)
+
+        if parent_name and sym.kind == SymbolKind.FUNCTION:
+            parts.append(parent_name.lower())
+
         parts.append(sym.name)
-        return ".".join(parts)
+        base_id = ".".join(parts)
+        # Append line number for dedup when same name appears multiple times
+        return f"{base_id}@{sym.line_start}"

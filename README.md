@@ -87,16 +87,90 @@ Mỗi entry có schema:
 
 ## Quick Start
 
+**Yêu cầu**: Python 3.10+
+
 ```bash
 python -m venv .venv && source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-
-# Analyze a repository
-kb-agent analyze --repo /path/to/repo --out .kb
-
-# Query the knowledge base
-kb-agent query "How does user registration work?"
 ```
+
+### Scan — Liệt kê source files
+
+```bash
+python -m scripts.cli scan --repo /path/to/repo
+```
+
+Output:
+```
+Found 38 source files in /path/to/repo
+  python   src/services/user_service.py
+  csharp   src/Services/UserService.cs
+  cpp      src/core/engine.cpp
+```
+
+### Parse — Trích xuất symbols
+
+```bash
+python -m scripts.cli parse --repo /path/to/repo
+```
+
+Output:
+```
+src/services/user_service.py (python):
+  class      L  7-24  UserService
+             class UserService
+  function   L 13-17  create_user
+             def create_user(name: str, email: str) -> dict
+  import     typing (Optional)
+```
+
+### Analyze — Full pipeline (3 layers)
+
+```bash
+# Static analysis only (không cần OpenAI API key)
+python -m scripts.cli analyze --repo /path/to/repo --out .kb --skip-ai
+
+# Với LLM enrichment (cần OPENAI_API_KEY env var)
+python -m scripts.cli analyze --repo /path/to/repo --out .kb
+```
+
+Output:
+```
+Analysis complete: 205 entries
+  Layers: {'arch': 1, 'mod': 3, 'mem': 201}
+  Languages: python, csharp, cpp
+  Output: .kb
+```
+
+### Validate — Kiểm tra chất lượng KB
+
+```bash
+python -m scripts.cli validate --kb .kb
+```
+
+Output:
+```
+Validation report for .kb:
+  Total entries: 205
+  Consistency: 100%
+  [PASS] parent_consistency: All parents consistent
+  [PASS] orphan_detection: No orphans
+```
+
+### Query — Semantic search (cần sentence-transformers + faiss-cpu)
+
+```bash
+pip install sentence-transformers faiss-cpu
+python -m scripts.cli query "How does user registration work?" --kb .kb
+```
+
+### CLI flags
+
+| Command | Flag | Mô tả |
+|---|---|---|
+| `analyze` | `--skip-ai` | Chỉ static analysis, không gọi LLM |
+| `analyze` | `--model gpt-4o-mini` | Chọn model LLM |
+| `query` | `--top-k 3` | Số kết quả trả về |
 
 ## Đánh giá chất lượng
 
@@ -109,7 +183,7 @@ kb-agent query "How does user registration work?"
 
 ## Trạng thái dự án
 
-**Pre-MVP** — đang thiết kế. Xem chi tiết tại [docs/MVP.md](docs/MVP.md).
+**MVP hoàn tất** — scanner, parser (Python/C#/C++), 3-layer analysis pipeline, validator, CLI đều hoạt động. 41 tests passing. Xem chi tiết tại [docs/MVP.md](docs/MVP.md) và [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
 
 ## License
 
