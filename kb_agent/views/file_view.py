@@ -125,26 +125,32 @@ class FileViewBuilder(ViewBuilder):
     def _classify_edges_by_file(
         self, edges: list[SymbolEdge], node_to_file: dict[str, str],
     ) -> dict[str, tuple[list[SymbolEdge], list[SymbolEdge]]]:
-        """Classify all edges into intra/external per file in a single pass."""
+        """Classify all edges into intra/external per file in a single pass.
+
+        Returns dict mapping file_path -> (intra_edges, external_edges).
+        Edges where neither endpoint maps to a known file are skipped.
+        """
         result: dict[str, tuple[list[SymbolEdge], list[SymbolEdge]]] = {}
+
+        def _ensure(fp: str) -> tuple[list[SymbolEdge], list[SymbolEdge]]:
+            if fp not in result:
+                result[fp] = ([], [])
+            return result[fp]
+
         for e in edges:
             src_file = node_to_file.get(e.source)
             tgt_file = node_to_file.get(e.target)
-            if src_file is None and tgt_file is None:
+
+            if not src_file and not tgt_file:
                 continue
+
             if src_file and src_file == tgt_file:
-                if src_file not in result:
-                    result[src_file] = ([], [])
-                result[src_file][0].append(e)
+                _ensure(src_file)[0].append(e)
             else:
                 if src_file:
-                    if src_file not in result:
-                        result[src_file] = ([], [])
-                    result[src_file][1].append(e)
+                    _ensure(src_file)[1].append(e)
                 if tgt_file and tgt_file != src_file:
-                    if tgt_file not in result:
-                        result[tgt_file] = ([], [])
-                    result[tgt_file][1].append(e)
+                    _ensure(tgt_file)[1].append(e)
         return result
 
     def _build_mod_lookup(self, mod_entries: list[KBEntry]) -> dict[str, str | None]:

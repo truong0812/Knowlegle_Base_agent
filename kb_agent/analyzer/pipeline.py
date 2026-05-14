@@ -142,12 +142,13 @@ class AnalysisPipeline:
         file: list[KBEntry],
         mem: list[KBEntry] | None = None,
     ) -> list[KBEntry]:
-        """Set children fields on parent entries."""
+        """Set children fields on parent entries.
+
+        When mem is None, only arch+mod+file are linked (legacy path).
+        When mem is provided, all four layers are linked (graph path).
+        """
         entry_map: dict[str, KBEntry] = {}
-        if mem is not None:
-            all_entries = arch + mod + file + mem
-        else:
-            all_entries = arch + mod + file
+        all_entries = arch + mod + file + (mem if mem else [])
         for entry in all_entries:
             entry_map[entry.id] = entry
 
