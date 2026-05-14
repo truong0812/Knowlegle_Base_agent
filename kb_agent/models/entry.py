@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class Layer(str, Enum):
     ARCH = "arch"
     MOD = "mod"
+    FILE = "file"
     MEM = "mem"
 
 
