@@ -30,11 +30,17 @@ class GraphBuilder:
         self._repo_name = repo_name
         self._nodes: list[SymbolNode] = []
         self._edges: list[SymbolEdge] = []
+        # Core indexes
         self._node_index: dict[str, SymbolNode] = {}
         self._name_to_ids: dict[str, list[str]] = {}
         self._file_to_ids: dict[str, list[str]] = {}
         self._import_map: dict[str, dict[str, str]] = {}
         self._seen_ids: set[str] = set()
+        # Optimization indexes (built after nodes phase)
+        self._file_symbol_map: dict[str, dict[str, str]] = {}
+        self._child_to_parent: dict[str, str] = {}
+        self._class_children: dict[str, dict[str, str]] = {}
+        self._sorted_file_nodes: dict[str, list[tuple[int, int, str]]] = {}
 
     def build(
         self,
@@ -46,6 +52,8 @@ class GraphBuilder:
 
         for file_path, result in parse_results.items():
             self._create_nodes_from_symbols(file_path, result.language, result.symbols)
+
+        self._build_optimization_indexes()
 
         self._create_contains_edges(parse_results)
         self._create_imports_edges(parse_results)
@@ -60,6 +68,29 @@ class GraphBuilder:
     @property
     def edges(self) -> list[SymbolEdge]:
         return self._edges
+
+    # ── Optimization Indexes ─────────────────────────────────────
+
+    def _build_optimization_indexes(self) -> None:
+        """Pre-build lookup indexes for O(1) access patterns."""
+        # file_symbol_map: {file_path: {symbol_name: node_id}}
+        for nid, node in self._node_index.items():
+            self._file_symbol_map.setdefault(node.path, {})[node.name] = nid
+
+        # sorted_file_nodes: {file_path: [(line_start, line_end, node_id)]} sorted by line_start
+        for fp, ids in self._file_to_ids.items():
+            entries = []
+            for nid in ids:
+                node = self._node_index.get(nid)
+                if node:
+                    entries.append((node.line_start, node.line_end, nid))
+            entries.sort(key=lambda x: x[0])
+            self._sorted_file_nodes[fp] = entries
+
+    def _register_contains_index(self, parent_id: str, child_id: str, child_name: str) -> None:
+        """Update indexes when a CONTAINS edge is created."""
+        self._child_to_parent[child_id] = parent_id
+        self._class_children.setdefault(parent_id, {})[child_name] = child_id
 
     # ── Phase 1: Import Map ──────────────────────────────────────
 
@@ -82,7 +113,6 @@ class GraphBuilder:
         parse_results: dict[str, ParseResult],
     ) -> str | None:
         """Resolve an import to a file path in the repo."""
-        # Strategy 1: Convert dotted module path to file path
         candidates = [
             module_path.replace(".", "/") + ".py",
             module_path.replace(".", "/") + "/__init__.py",
@@ -94,7 +124,6 @@ class GraphBuilder:
             if candidate in parse_results:
                 return candidate
 
-        # Strategy 2: Match imported name against file stems
         for fp in parse_results:
             if Path(fp).stem == imported_name:
                 return fp
@@ -153,7 +182,6 @@ class GraphBuilder:
             self._seen_ids.add(base)
             return base
 
-        # Collision — append line number
         dedup = f"{base}#L{sym.line_start}"
         self._seen_ids.add(dedup)
         return dedup
@@ -182,35 +210,33 @@ class GraphBuilder:
                             source_type="deterministic",
                             resolution="parent_child",
                         ))
+                        self._register_contains_index(parent_id, child_id, child.name)
 
     # ── Phase 4: IMPORTS Edges ──────────────────────────────────
 
     def _create_imports_edges(self, parse_results: dict[str, ParseResult]) -> None:
-        """Create IMPORTS edges from source file symbols to imported file symbols."""
+        """Create IMPORTS edges using file_symbol_map for O(1) lookup."""
         for fp, parse_results_entry in parse_results.items():
             file_nodes = self._file_to_ids.get(fp, [])
             if not file_nodes:
                 continue
-            source_node_id = file_nodes[0]  # One edge per file-pair
+            source_node_id = file_nodes[0]
 
             for imp in parse_results_entry.imports:
                 for imported_name in imp.imported_names:
                     source_file = self._import_map.get(fp, {}).get(imported_name)
                     if not source_file:
                         continue
-                    target_ids = self._file_to_ids.get(source_file, [])
-                    for tid in target_ids:
-                        target_node = self._node_index.get(tid)
-                        if target_node and target_node.name == imported_name:
-                            self._edges.append(SymbolEdge(
-                                source=source_node_id,
-                                target=tid,
-                                kind=EdgeKind.IMPORTS,
-                                confidence=0.95,
-                                source_type="deterministic",
-                                resolution="direct_import",
-                            ))
-                            break
+                    target_id = self._file_symbol_map.get(source_file, {}).get(imported_name)
+                    if target_id:
+                        self._edges.append(SymbolEdge(
+                            source=source_node_id,
+                            target=target_id,
+                            kind=EdgeKind.IMPORTS,
+                            confidence=0.95,
+                            source_type="deterministic",
+                            resolution="direct_import",
+                        ))
 
     # ── Phase 5: CALLS Edges (Graduated Confidence) ─────────────
 
@@ -258,55 +284,35 @@ class GraphBuilder:
         resolution: str,
         caller_id: str,
     ) -> str | None:
-        """Find the target node ID for a call."""
+        """Find the target node ID for a call using pre-built indexes."""
         callee = call.callee_name
-        candidate_ids = self._name_to_ids.get(callee, [])
 
         if resolution == "same_scope":
             parent_class = self._find_parent_class(caller_id)
             if parent_class:
-                for edge in self._edges:
-                    if edge.source == parent_class and edge.kind == EdgeKind.CONTAINS:
-                        target = self._node_index.get(edge.target)
-                        if target and target.name == callee:
-                            return edge.target
+                return self._class_children.get(parent_class, {}).get(callee)
 
         elif resolution == "same_file":
-            for cid in candidate_ids:
-                node = self._node_index.get(cid)
-                if node and node.path == fp:
-                    return cid
+            return self._file_symbol_map.get(fp, {}).get(callee)
 
         elif resolution == "constructor":
-            for cid in candidate_ids:
+            for cid in self._name_to_ids.get(callee, []):
                 node = self._node_index.get(cid)
                 if node and node.kind == SymbolKind.CLASS:
                     return cid
 
         elif resolution == "static_call":
             receiver = call.receiver
-            for cid in candidate_ids:
-                node = self._node_index.get(cid)
-                if node and node.path == fp:
-                    return cid
-            # Check receiver class children
             receiver_ids = self._name_to_ids.get(receiver, [])
             for rid in receiver_ids:
                 rnode = self._node_index.get(rid)
                 if rnode and rnode.kind == SymbolKind.CLASS:
-                    for edge in self._edges:
-                        if edge.source == rid and edge.kind == EdgeKind.CONTAINS:
-                            target = self._node_index.get(edge.target)
-                            if target and target.name == callee:
-                                return edge.target
+                    return self._class_children.get(rid, {}).get(callee)
 
         elif resolution == "direct_import":
             source_file = self._import_map.get(fp, {}).get(callee)
             if source_file:
-                for cid in candidate_ids:
-                    node = self._node_index.get(cid)
-                    if node and node.path == source_file:
-                        return cid
+                return self._file_symbol_map.get(source_file, {}).get(callee)
 
         return None
 
@@ -369,7 +375,6 @@ class GraphBuilder:
             node = self._node_index.get(nid)
             if node and node.path == file_path and node.line_start == line_start:
                 return nid
-        # Fallback: match by name and file only
         for nid in self._name_to_ids.get(name, []):
             node = self._node_index.get(nid)
             if node and node.path == file_path:
@@ -377,23 +382,41 @@ class GraphBuilder:
         return None
 
     def _find_enclosing_node(self, file_path: str, line: int) -> str | None:
-        """Find the innermost node whose line range contains the given line."""
+        """Find the innermost node whose line range contains the given line.
+
+        Uses binary search on pre-sorted nodes for O(log N) lookup.
+        """
+        entries = self._sorted_file_nodes.get(file_path)
+        if not entries:
+            return None
+
         best: str | None = None
         best_range = float("inf")
-        for nid in self._file_to_ids.get(file_path, []):
-            node = self._node_index.get(nid)
-            if not node:
+
+        # Find the first node that starts at or before the target line
+        lo, hi = 0, len(entries)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if entries[mid][0] <= line:
+                lo = mid + 1
+            else:
+                hi = mid
+
+        # Check candidates near the found position (going backwards)
+        for i in range(lo - 1, -1, -1):
+            start, end, nid = entries[i]
+            if start > line:
                 continue
-            if node.line_start <= line <= node.line_end:
-                span = node.line_end - node.line_start
+            if start <= line <= end:
+                span = end - start
                 if span < best_range:
                     best = nid
                     best_range = span
+            elif end < line:
+                break
+
         return best
 
     def _find_parent_class(self, node_id: str) -> str | None:
-        """Find the parent class node for a given method node."""
-        for edge in self._edges:
-            if edge.target == node_id and edge.kind == EdgeKind.CONTAINS:
-                return edge.source
-        return None
+        """Find the parent class node for a given method node. O(1) via index."""
+        return self._child_to_parent.get(node_id)
