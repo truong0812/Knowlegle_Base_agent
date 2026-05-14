@@ -7,7 +7,7 @@ import tree_sitter_python as tspython
 from tree_sitter import Language as TSLanguage, Parser, Node
 
 from kb_agent.models.entry import Language, Parameter, SymbolKind
-from kb_agent.parser.base import BaseParser, ImportInfo, ParseResult, SymbolInfo
+from kb_agent.parser.base import BaseParser, CallInfo, ImportInfo, ParseResult, SymbolInfo, TypeUsageInfo
 
 
 class PythonParser(BaseParser):
@@ -31,11 +31,15 @@ class PythonParser(BaseParser):
 
         symbols = self.extract_symbols(tree.root_node)
         imports = self.extract_imports(tree.root_node)
+        calls = self._extract_calls(tree.root_node, symbols)
+        type_usages = self._extract_type_usages(tree.root_node, symbols)
         return ParseResult(
             file_path=file_path,
             language=Language.PYTHON,
             symbols=symbols,
             imports=imports,
+            calls=calls,
+            type_usages=type_usages,
             errors=errors,
         )
 
@@ -68,6 +72,14 @@ class PythonParser(BaseParser):
         name = self._get_child_by_type(node, "identifier")
         name_str = self._node_text(name) if name else "<unknown>"
 
+        # Extract base classes from argument_list
+        bases: list[str] = []
+        for child in node.children:
+            if child.type == "argument_list":
+                for arg in child.children:
+                    if arg.type in ("identifier", "attribute", "dotted_name"):
+                        bases.append(self._node_text(arg))
+
         # Extract methods from class body
         children: list[SymbolInfo] = []
         body = self._get_child_by_type(node, "block")
@@ -92,6 +104,7 @@ class PythonParser(BaseParser):
             signature=f"class {name_str}",
             docstring=docstring,
             children=children,
+            bases=bases,
         )
 
     def _extract_function(self, node: Node) -> SymbolInfo:
@@ -214,6 +227,7 @@ class PythonParser(BaseParser):
                     if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         children.append(self._ast_func_to_symbol(item))
                 docstring = ast.get_docstring(node)
+                bases = [ast.unparse(b) for b in node.bases]
                 symbols.append(
                     SymbolInfo(
                         name=node.name,
@@ -223,6 +237,7 @@ class PythonParser(BaseParser):
                         signature=f"class {node.name}",
                         docstring=docstring,
                         children=children,
+                        bases=bases,
                     )
                 )
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -285,3 +300,109 @@ class PythonParser(BaseParser):
             if child.type == type_name:
                 return child
         return None
+
+    def _extract_calls(self, root_node: Node, symbols: list[SymbolInfo]) -> list[CallInfo]:
+        """Walk AST for call nodes, resolve to CallInfo with resolution method."""
+        class_names = {s.name for s in symbols if s.kind == SymbolKind.CLASS}
+        local_func_names = {s.name for s in symbols if s.kind == SymbolKind.FUNCTION}
+        for cls in symbols:
+            if cls.kind == SymbolKind.CLASS:
+                for m in cls.children:
+                    local_func_names.add(m.name)
+
+        calls: list[CallInfo] = []
+        self._walk_for_calls(root_node, calls, class_names, local_func_names)
+        return calls
+
+    def _walk_for_calls(
+        self, node: Node, out: list[CallInfo],
+        class_names: set[str], local_names: set[str],
+    ) -> None:
+        for child in node.children:
+            if child.type == "call":
+                call_info = self._resolve_call(child, class_names, local_names)
+                if call_info:
+                    out.append(call_info)
+            if child.type not in ("import_statement", "import_from_statement"):
+                self._walk_for_calls(child, out, class_names, local_names)
+
+    def _resolve_call(
+        self, call_node: Node,
+        class_names: set[str], local_names: set[str],
+    ) -> CallInfo | None:
+        func_node = call_node.child_by_field_name("function")
+        if not func_node:
+            return None
+
+        line = call_node.start_point[0] + 1
+
+        if func_node.type == "attribute":
+            obj = func_node.child_by_field_name("object")
+            attr = func_node.child_by_field_name("attribute")
+            receiver = self._node_text(obj) if obj else None
+            callee = self._node_text(attr) if attr else "<unknown>"
+
+            if receiver == "self":
+                return CallInfo(
+                    caller_name="", callee_name=callee, line=line,
+                    resolution_method="same_scope", is_self_call=True, receiver="self",
+                )
+            if receiver in class_names:
+                return CallInfo(
+                    caller_name="", callee_name=callee, line=line,
+                    resolution_method="static_call", receiver=receiver,
+                )
+            return CallInfo(
+                caller_name="", callee_name=callee, line=line,
+                resolution_method="dynamic_dispatch", receiver=receiver,
+            )
+
+        if func_node.type == "identifier":
+            callee = self._node_text(func_node)
+            if callee in class_names:
+                return CallInfo(
+                    caller_name="", callee_name=callee, line=line,
+                    resolution_method="constructor",
+                )
+            if callee in local_names:
+                return CallInfo(
+                    caller_name="", callee_name=callee, line=line,
+                    resolution_method="same_file",
+                )
+            return CallInfo(
+                caller_name="", callee_name=callee, line=line,
+                resolution_method="unresolved",
+            )
+
+        return None
+
+    def _extract_type_usages(
+        self, root_node: Node, symbols: list[SymbolInfo],
+    ) -> list[TypeUsageInfo]:
+        """Extract type references from parameters, return types, annotations."""
+        usages: list[TypeUsageInfo] = []
+        for sym in symbols:
+            if sym.return_type:
+                usages.append(TypeUsageInfo(
+                    symbol_name=sym.name, type_name=sym.return_type,
+                    usage_context="return_type", line=sym.line_start,
+                ))
+            for p in sym.parameters:
+                if p.type:
+                    usages.append(TypeUsageInfo(
+                        symbol_name=sym.name, type_name=p.type,
+                        usage_context="parameter", line=sym.line_start,
+                    ))
+            for child in sym.children:
+                if child.return_type:
+                    usages.append(TypeUsageInfo(
+                        symbol_name=child.name, type_name=child.return_type,
+                        usage_context="return_type", line=child.line_start,
+                    ))
+                for p in child.parameters:
+                    if p.type:
+                        usages.append(TypeUsageInfo(
+                            symbol_name=child.name, type_name=p.type,
+                            usage_context="parameter", line=child.line_start,
+                        ))
+        return usages

@@ -20,12 +20,35 @@ class SymbolInfo:
     return_type: str | None = None
     docstring: str | None = None
     children: list[SymbolInfo] = field(default_factory=list)
+    bases: list[str] = field(default_factory=list)
 
 
 @dataclass
 class ImportInfo:
     module_path: str
     imported_names: list[str] = field(default_factory=list)
+
+
+@dataclass
+class CallInfo:
+    """A call expression found in a function/method body."""
+
+    caller_name: str
+    callee_name: str
+    line: int
+    resolution_method: str  # "same_scope", "same_file", "direct_import", "constructor", "static_call", "dynamic_dispatch", "unresolved"
+    is_self_call: bool = False
+    receiver: str | None = None
+
+
+@dataclass
+class TypeUsageInfo:
+    """A type reference found in a parameter, return type, or annotation."""
+
+    symbol_name: str
+    type_name: str
+    usage_context: str  # "parameter", "return_type", "annotation"
+    line: int
 
 
 @dataclass
@@ -36,6 +59,8 @@ class ParseResult:
     language: Language
     symbols: list[SymbolInfo] = field(default_factory=list)
     imports: list[ImportInfo] = field(default_factory=list)
+    calls: list[CallInfo] = field(default_factory=list)
+    type_usages: list[TypeUsageInfo] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
 

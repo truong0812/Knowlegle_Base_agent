@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from kb_agent.parser.base import ParseResult
 from kb_agent.parser.factory import get_parser
 from kb_agent.scanner.scanner import FileScanner
 
+logger = logging.getLogger(__name__)
+
 
 class AnalysisPipeline:
     """Orchestrates the full 3-layer analysis pipeline."""
@@ -23,14 +26,16 @@ class AnalysisPipeline:
         repo_root: Path,
         out_dir: Path,
         llm_client: LLMClient | None = None,
+        build_graph: bool = False,
     ) -> None:
         self._repo_root = repo_root.resolve()
         self._out_dir = out_dir.resolve()
         self._llm = llm_client
         self._scanner = FileScanner(repo_root)
+        self._build_graph = build_graph
 
     async def run(self) -> Manifest:
-        """Run full pipeline: scan → parse → 3-layer analyze → write."""
+        """Run full pipeline: scan → parse → graph (opt) → 3-layer analyze → write."""
         # 1. Scan
         file_entries = self._scanner.scan()
         if not file_entries:
@@ -38,6 +43,10 @@ class AnalysisPipeline:
 
         # 2. Parse all files
         parse_results = self._parse_all(file_entries)
+
+        # 2.5. Build symbol graph (opt-in)
+        if self._build_graph:
+            self._build_and_save_graph(parse_results)
 
         # 3. Layer 1: Architecture
         arch_analyzer = ArchitectureAnalyzer(self._llm)
@@ -60,6 +69,22 @@ class AnalysisPipeline:
         # 8. Build vector index
         self._build_index(all_entries)
         return manifest
+
+    def _build_and_save_graph(self, parse_results: dict[str, ParseResult]) -> None:
+        """Build symbol graph from parse results and save to disk."""
+        from kb_agent.graph.builder import GraphBuilder
+        from kb_agent.graph.storage import GraphStorage
+
+        builder = GraphBuilder(repo_name=self._repo_root.name)
+        builder.build(parse_results, repo_root=self._repo_root)
+
+        storage = GraphStorage(self._out_dir / "graph")
+        storage.save(builder.nodes, builder.edges)
+
+        logger.info(
+            "Graph built: %d nodes, %d edges",
+            len(builder.nodes), len(builder.edges),
+        )
 
     def _parse_all(self, file_entries) -> dict[str, ParseResult]:
         """Parse every file. Returns dict keyed by rel_path."""
