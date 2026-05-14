@@ -133,15 +133,18 @@ class FileViewBuilder(ViewBuilder):
             if src_file is None and tgt_file is None:
                 continue
             if src_file and src_file == tgt_file:
-                intra, ext = result.setdefault(src_file, ([], []))
-                intra.append(e)
+                if src_file not in result:
+                    result[src_file] = ([], [])
+                result[src_file][0].append(e)
             else:
                 if src_file:
-                    _, ext = result.setdefault(src_file, ([], []))
-                    ext.append(e)
+                    if src_file not in result:
+                        result[src_file] = ([], [])
+                    result[src_file][1].append(e)
                 if tgt_file and tgt_file != src_file:
-                    _, ext = result.setdefault(tgt_file, ([], []))
-                    ext.append(e)
+                    if tgt_file not in result:
+                        result[tgt_file] = ([], [])
+                    result[tgt_file][1].append(e)
         return result
 
     def _build_mod_lookup(self, mod_entries: list[KBEntry]) -> dict[str, str | None]:

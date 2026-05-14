@@ -139,15 +139,15 @@ class AnalysisPipeline:
         self,
         arch: list[KBEntry],
         mod: list[KBEntry],
-        mem_or_file: list[KBEntry],
+        file: list[KBEntry],
         mem: list[KBEntry] | None = None,
     ) -> list[KBEntry]:
         """Set children fields on parent entries."""
         entry_map: dict[str, KBEntry] = {}
         if mem is not None:
-            all_entries = arch + mod + mem_or_file + mem
+            all_entries = arch + mod + file + mem
         else:
-            all_entries = arch + mod + mem_or_file
+            all_entries = arch + mod + file
         for entry in all_entries:
             entry_map[entry.id] = entry
 

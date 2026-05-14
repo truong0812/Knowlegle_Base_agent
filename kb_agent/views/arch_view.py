@@ -45,14 +45,10 @@ class ArchViewBuilder(ViewBuilder):
         nodes: list[SymbolNode] = kwargs["nodes"]
         edges: list[SymbolEdge] = kwargs["edges"]
 
-        lang_counter: Counter[str] = Counter()
-        for n in nodes:
-            lang_counter[n.language.value] += 1
+        lang_counter = Counter(n.language.value for n in nodes)
 
-        edge_stats: dict[str, int] = {}
-        for e in edges:
-            key = e.kind.value
-            edge_stats[key] = edge_stats.get(key, 0) + 1
+        edge_counter = Counter(e.kind.value for e in edges)
+        edge_stats = dict(edge_counter)
 
         entry_points = self._find_entry_points(nodes)
         primary_lang, all_langs = _langs_from_counter(lang_counter)
