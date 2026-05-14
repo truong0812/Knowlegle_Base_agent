@@ -125,7 +125,10 @@ class SymbolEdge:
     kind: EdgeKind     # imports, calls, inherits, implements, uses_type
     confidence: float  # 0.0 - 1.0
     source_type: str   # "deterministic", "heuristic", "inferred"
+    resolution: str    # HOW edge was resolved — determines confidence
 ```
+
+`resolution` field là khóa để graduate confidence. Thay vì gán 1 giá trị flat cho mỗi edge kind, confidence được xác định bởi **cách resolve** dẫn đến edge đó.
 
 #### Graph Ontology (MVP — minimal)
 
@@ -135,13 +138,26 @@ class SymbolEdge:
 | `inherits` | Class A kế thừa class B | `class Admin(User)` | 0.95 |
 | `implements` | Class A implement interface B | `class AuthValidator(IValidator)` | 0.90 |
 | `contains` | Class A chứa method B | `AuthMiddleware.validate_token` | 1.00 |
-| `calls` | Function A gọi function B | `login()` calls `verify()` | 0.70 |
+| `calls` | Function A gọi function B | `login()` calls `verify()` | Graduated (see below) |
 | `uses_type` | Function A dùng type B trong params/return | `def get_user(id: int) -> User` | 0.80 |
 
-**`calls` confidence thấp nhất vì:**
-- Alias imports: `from auth import login as auth_login` → static analysis có thể miss
-- Dynamic dispatch: `obj.method()` → không biết `obj` là class nào
-- Indirect calls: callbacks, event handlers
+#### Graduated `calls` Confidence
+
+`calls` là edge kind khó resolve nhất. Confidence được assign theo resolution method, KHÔNG dùng giá trị flat:
+
+| Resolution Method | Mô tả | Confidence | Add to graph? |
+|---|---|---|---|
+| `same_scope` | `self.method()` hoặc method trong cùng class | 0.85 | Yes |
+| `same_file` | Gọi function trong cùng file, không qua alias | 0.80 | Yes |
+| `direct_import` | `from x import func` → gọi `func()` | 0.75 | Yes |
+| `constructor` | `ClassName()` → constructor call | 0.75 | Yes |
+| `static_call` | `ClassName.method()` → static/class method | 0.80 | Yes |
+| `aliased_import` | `from x import func as f` → gọi `f()` | 0.45 | No (< 0.50) |
+| `dynamic_dispatch` | `obj.method()` — type của `obj` không biết | 0.35 | No (< 0.50) |
+| `callback` | Callback/event handler — target không xác định | 0.30 | No (< 0.50) |
+| `unresolved` | Không tìm thấy target | 0.00 | No |
+
+**Rule: Resolution method có confidence < 0.50 → KHÔNG thêm edge vào graph.**
 
 #### Confidence-aware Edge Resolution
 
@@ -155,7 +171,7 @@ class SymbolEdge:
 │     - Không ambiguity                                    │
 │                                                          │
 │  2. HEURISTIC (confidence: 0.50-0.89)                   │
-│     - calls: resolve bằng name matching + scope          │
+│     - calls: confidence graduated theo resolution method │
 │     - uses_type: từ type annotations                     │
 │     - Có thể sai nếu alias/overload                      │
 │                                                          │
@@ -174,17 +190,21 @@ class SymbolEdge:
 ```
 Input: auth.py gọi login(email, password)
 
-Step 1: Check imports trong file
+Step 1: Check resolution context
+  → Gọi qua self/this? → resolution: "same_scope", confidence: 0.85
+  → Gọi constructor (ClassName())? → resolution: "constructor", confidence: 0.75
+  → Gọi static method (ClassName.method())? → resolution: "static_call", confidence: 0.80
+
+Step 2: Check imports trong file
   → from services.auth_service import login ✅
-  → Resolve: repo/services/auth_service.py::login(email, password)
-  → Confidence: 0.70 (heuristic, vì có thể là alias hoặc wrong overload)
+  → Không qua alias? → resolution: "direct_import", confidence: 0.75
+  → Via alias (import login as x)? → resolution: "aliased_import", confidence: 0.45 → SKIP
 
-Step 2: Nếu không tìm thấy trong imports
-  → Check symbols trong cùng file
-  → Nếu tìm thấy → local call, confidence 0.85
+Step 3: Check symbols trong cùng file
+  → Tìm thấy? → resolution: "same_file", confidence: 0.80
 
-Step 3: Nếu vẫn không tìm thấy
-  → Skip edge. KHÔNG guess.
+Step 4: Nếu không tìm thấy target
+  → resolution: "unresolved", confidence: 0.00 → Skip edge. KHÔNG guess.
 ```
 
 ### 2.3 Materialized Views
@@ -322,16 +342,52 @@ Budget constraints:
 
 ```
 Token budget: ~4000 tokens per query response
-
-Allocation:
-  - Entry node (the thing agent asked about): 40% (~1600 tokens)
-    → full signature, docstring, behavior, file context
-  - 1-hop neighbors (direct relationships): 35% (~1400 tokens)
-    → summary + relationship type
-  - 2-hop neighbors (indirect relationships): 15% (~600 tokens)
-    → name + kind + edge type only
-  - Metadata (module, architecture context): 10% (~400 tokens)
 ```
+
+Fixed ratio (40/35/15/10) là điểm bắt đầu, KHÔNG phải giá trị cuối. Thay vào đó, dùng adaptive budget:
+
+```
+Adaptive Budget Strategy:
+
+1. Base budget: 4000 tokens
+
+2. Query intent factor — ratio thay đổi theo loại query:
+   - SYMBOL_LOOKUP → entry: 60%, 1-hop: 20%, 2-hop: 10%, meta: 10%
+   - FLOW_TRACE    → entry: 25%, 1-hop: 45%, 2-hop: 20%, meta: 10%
+   - RELATIONSHIP  → entry: 30%, 1-hop: 40%, 2-hop: 20%, meta: 10%
+   - Default       → entry: 40%, 1-hop: 35%, 2-hop: 15%, meta: 10%
+
+3. Per-node cap: max 500 tokens/node
+   → Tránh 1 node phức tạp (class 20 methods) chiếm hết budget
+   → Nếu node exceed cap → truncate to signature + summary only
+
+4. Truncation priority (khi exceed budget):
+   → 2-hop neighbors bị truncate trước (giữ name + kind only)
+   → 1-hop neighbors bị truncate tiếp (gi giữ summary)
+   → Entry node bị truncate cuối (luôn giữ signature)
+
+5. Hard limits:
+   → Max 15 nodes total in response
+   → Max 5 edges per node shown
+   → Utility nodes suppressed regardless of budget
+```
+
+**Instrumentation để measure và tune:**
+
+```python
+class RetrievalMetrics:
+    query: str
+    intent: str                    # SYMBOL_LOOKUP, FLOW_TRACE, etc.
+    seed_nodes: list[str]          # Entry nodes từ semantic search
+    expanded_nodes: list[str]      # Nodes sau graph expansion
+    token_allocation: dict[str, int]  # {entry: 1600, hop1: 1400, hop2: 600, meta: 400}
+    truncated: bool                # Có exceed budget không?
+    truncated_nodes: list[str]     # Nodes bị bỏ vì budget
+    total_tokens_used: int
+```
+
+Log `RetrievalMetrics` mỗi query → có data thật để tune ratio trong Phase 2.
+Không tune bằng guessing. Tune bằng measurement.
 
 ### 2.5 Embedding Strategy (MVP — giải quyết #13)
 
@@ -367,20 +423,57 @@ Propagation (MVP: không implement)
 ### 2.7 Incremental Updates (giải quyết #8)
 
 ```
-Strategy: hash-based invalidation
+Strategy: hash-based invalidation + orphan cleanup
+```
 
+#### Hash-based Invalidation
+
+```
 1. Store file content hash trong manifest
 2. On re-run:
-   - Diff file hashes → identify changed files
-   - Re-parse only changed files
+   - Diff file hashes → identify changed/added/removed files
+   - Re-parse only changed + added files
    - Re-compute nodes/edges for changed files
-   - Diff graph: remove old nodes/edges, add new ones
-   - Re-materialize affected views:
-     * FILE view: only for changed files
-     * MEM view: only for symbols in changed files
-     * MOD view: only if imports/symbols changed in module
-     * ARCH view: only if language counts changed
-   - Update FAISS index for affected entries
+```
+
+#### Orphan Cleanup Pipeline
+
+Khi file bị xóa hoặc symbol bị đổi tên, nodes/edges cũ vẫn còn trong graph → cần cleanup:
+
+```
+Step 1: DIFF — So sánh old parse output vs new parse output
+  → removed_nodes: nodes trong old nhưng không trong new
+  → added_nodes: nodes trong new nhưng không trong old
+  → modified_nodes: nodes trong cả hai nhưng signature thay đổi
+
+Step 2: REMOVE — Xóa removed_nodes khỏi graph
+  → Xóa tất cả edges có source hoặc target là removed_node
+  → Log removed edges cho downstream invalidation
+
+Step 3: CASCADE — Kiểm tra nodes bị ảnh hưởng
+  → Nodes có edge trỏ đến removed_node → mark là "stale"
+  → Modules chứa removed_node → mark module view là "stale"
+
+Step 4: REBUILD — Re-materialize stale views
+  → Re-materialize FILE view cho changed/stale files
+  → Re-materialize MEM view cho symbols trong stale files
+  → Re-materialize MOD view cho modules bị mark stale
+  → Re-materialize ARCH view only if language counts changed
+
+Step 5: VALIDATE — Orphan check
+  → Verify không còn edge nào trỏ đến node không tồn tại
+  → Verify không còn view nào reference node đã bị xóa
+  → Report orphan count trong quality_report.json
+```
+
+#### Edge Cases
+
+```
+- File renamed: treated as remove old + add new → all edges updated
+- Symbol renamed within file: treated as remove old node + add new node
+- Import removed: edges từ importing file → mark stale, re-resolve
+- File deleted: all nodes/edges removed, cascade to views
+- Circular dependency: cleanup handles by removing all edges first, then rebuilding
 ```
 
 ### 2.8 MVP Explicitly EXCLUDES
