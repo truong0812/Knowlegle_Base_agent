@@ -14,6 +14,11 @@ from kb_agent.analyzer.mod_layer import ModuleAnalyzer
 from kb_agent.parser.base import ParseResult
 from kb_agent.parser.factory import get_parser
 from kb_agent.scanner.scanner import FileScanner
+from kb_agent.views.arch_view import ArchViewBuilder
+from kb_agent.views.base import ViewIDMapper
+from kb_agent.views.file_view import FileViewBuilder
+from kb_agent.views.mem_view import MemViewBuilder
+from kb_agent.views.mod_view import ModViewBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -78,11 +83,6 @@ class AnalysisPipeline:
     async def _materialize_views(self, parse_results: dict[str, ParseResult]) -> list[KBEntry]:
         """Build views from symbol graph instead of legacy layers."""
         from kb_agent.graph.storage import GraphStorage
-        from kb_agent.views.arch_view import ArchViewBuilder
-        from kb_agent.views.base import ViewIDMapper
-        from kb_agent.views.file_view import FileViewBuilder
-        from kb_agent.views.mem_view import MemViewBuilder
-        from kb_agent.views.mod_view import ModViewBuilder
 
         storage = GraphStorage(self._out_dir / "graph")
         nodes, edges = storage.load()
