@@ -27,15 +27,17 @@ class AnalysisPipeline:
         out_dir: Path,
         llm_client: LLMClient | None = None,
         build_graph: bool = False,
+        module_depth: int = 1,
     ) -> None:
         self._repo_root = repo_root.resolve()
         self._out_dir = out_dir.resolve()
         self._llm = llm_client
         self._scanner = FileScanner(repo_root)
         self._build_graph = build_graph
+        self._module_depth = module_depth
 
     async def run(self) -> Manifest:
-        """Run full pipeline: scan → parse → graph (opt) → 3-layer analyze → write."""
+        """Run full pipeline: scan → parse → graph (opt) → views/layers → write."""
         # 1. Scan
         file_entries = self._scanner.scan()
         if not file_entries:
@@ -47,28 +49,57 @@ class AnalysisPipeline:
         # 2.5. Build symbol graph (opt-in)
         if self._build_graph:
             self._build_and_save_graph(parse_results)
+            all_entries = await self._materialize_views(parse_results)
+        else:
+            all_entries = await self._run_layers(file_entries, parse_results)
 
-        # 3. Layer 1: Architecture
+        # Write to disk
+        manifest = self._write_entries(all_entries)
+
+        # Build vector index
+        self._build_index(all_entries)
+        return manifest
+
+    async def _run_layers(
+        self, file_entries, parse_results: dict[str, ParseResult],
+    ) -> list[KBEntry]:
+        """Run legacy layer-based analysis (when --with-graph is not set)."""
         arch_analyzer = ArchitectureAnalyzer(self._llm)
         arch_entries = await arch_analyzer.analyze(file_entries, parse_results)
 
-        # 4. Layer 2: Modules
         mod_analyzer = ModuleAnalyzer(self._llm)
         mod_entries = await mod_analyzer.analyze(arch_entries, parse_results)
 
-        # 5. Layer 3: Members
         mem_analyzer = MemberAnalyzer(self._llm)
         mem_entries = await mem_analyzer.analyze(mod_entries, parse_results)
 
-        # 6. Link parent-child
-        all_entries = self._link_entries(arch_entries, mod_entries, mem_entries)
+        return self._link_entries(arch_entries, mod_entries, mem_entries)
 
-        # 7. Write to disk
-        manifest = self._write_entries(all_entries)
+    async def _materialize_views(self, parse_results: dict[str, ParseResult]) -> list[KBEntry]:
+        """Build views from symbol graph instead of legacy layers."""
+        from kb_agent.graph.storage import GraphStorage
+        from kb_agent.views.arch_view import ArchViewBuilder
+        from kb_agent.views.base import ViewIDMapper
+        from kb_agent.views.file_view import FileViewBuilder
+        from kb_agent.views.mem_view import MemViewBuilder
+        from kb_agent.views.mod_view import ModViewBuilder
 
-        # 8. Build vector index
-        self._build_index(all_entries)
-        return manifest
+        storage = GraphStorage(self._out_dir / "graph")
+        nodes, edges = storage.load()
+        mapper = ViewIDMapper(nodes, edges)
+
+        arch = await ArchViewBuilder(mapper, self._llm).build(nodes=nodes, edges=edges)
+        mod = await ModViewBuilder(mapper, self._llm, depth=self._module_depth).build(
+            nodes=nodes, edges=edges, arch_entries=arch,
+        )
+        file = await FileViewBuilder(mapper, self._llm).build(
+            edges=edges, mod_entries=mod,
+        )
+        mem = await MemViewBuilder(mapper, self._llm).build(
+            nodes=nodes, edges=edges, mod_entries=mod, file_entries=file,
+        )
+
+        return self._link_entries(arch, mod, file, mem)
 
     def _build_and_save_graph(self, parse_results: dict[str, ParseResult]) -> None:
         """Build symbol graph from parse results and save to disk."""
@@ -104,11 +135,15 @@ class AnalysisPipeline:
         self,
         arch: list[KBEntry],
         mod: list[KBEntry],
-        mem: list[KBEntry],
+        mem_or_file: list[KBEntry],
+        mem: list[KBEntry] | None = None,
     ) -> list[KBEntry]:
         """Set children fields on parent entries."""
         entry_map: dict[str, KBEntry] = {}
-        all_entries = arch + mod + mem
+        if mem is not None:
+            all_entries = arch + mod + mem_or_file + mem
+        else:
+            all_entries = arch + mod + mem_or_file
         for entry in all_entries:
             entry_map[entry.id] = entry
 
@@ -134,7 +169,7 @@ class AnalysisPipeline:
             )
 
         # Build manifest
-        by_layer = {"arch": 0, "mod": 0, "mem": 0}
+        by_layer: dict[str, int] = {"arch": 0, "mod": 0, "file": 0, "mem": 0}
         for entry in entries:
             by_layer[entry.layer.value] = by_layer.get(entry.layer.value, 0) + 1
 

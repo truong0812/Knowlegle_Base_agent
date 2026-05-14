@@ -6,6 +6,55 @@
 
 ---
 
+## Status Dashboard (Updated: 2026-05-14)
+
+### Phase 1 (MVP) Progress
+
+| Step | Description | Status | Branch | Details |
+|------|-------------|--------|--------|---------|
+| **Step 1** | Data models (SymbolNode, SymbolEdge, EdgeKind) | **DONE** | `feat/symbol-graph-builder` | `kb_agent/models/graph.py` + `kb_agent/parser/base.py` (CallInfo, TypeUsageInfo, bases) |
+| **Step 2** | Parser enhancements (calls, type usage, bases) | **DONE** | `feat/symbol-graph-builder` | All 3 parsers: Python, C#, C++ — 9 resolution methods |
+| **Step 3** | Graph builder + storage | **DONE** | `feat/symbol-graph-builder` | `builder.py` (7-phase build + 4 optimization indexes), `storage.py` (JSONL + adjacency) |
+| **Step 4** | Materialized views (ARCH/MOD/FILE/MEM from graph) | **DONE** | `feat/symbol-graph-builder` | `kb_agent/views/` — 4 view builders with configurable depth + import weighting |
+| **Step 5** | Retrieval engine (semantic + graph expansion) | **TODO** | — | Bounded traversal, context composition, adaptive token budget |
+| **Step 6** | Pipeline integration | **DONE** | `feat/symbol-graph-builder` | `--with-graph` + `--depth` flags in CLI, pipeline branches views vs old layers |
+| **Step 7** | Tests + validation | **DONE** | `feat/symbol-graph-builder` | 20 view tests + 14 graph builder tests + 3 storage tests — 95/95 all pass |
+
+### Phase 1 Summary
+
+**Completed:** Steps 1, 2, 3, 4, 6, 7 (Symbol Graph Builder + Materialized Views)
+
+- `--with-graph`: graph builder → 4 materialized views (ARCH/MOD/FILE/MEM)
+- Without flag: old layer-based approach unchanged (zero breaking changes)
+- 95/95 tests pass
+- New `FILE` layer added to `Layer` enum
+- `--depth N` option for configurable module grouping
+
+**Remaining:** Step 5 (Retrieval Engine)
+
+- Graph expansion with bounded traversal (max 2 hops, 15 nodes)
+- Context composition with adaptive token budget (~4000 tokens)
+- Utility suppression + confidence-based edge filtering
+
+### Phase 2–4 Status
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| **Phase 2** | **TODO** | Confident Graph — enhanced resolution, confidence propagation, feature overlay, query planner |
+| **Phase 3** | **TODO** | Intelligent Retrieval — cross-language bridging, temporal graph, hot-path learning, graph-aware embeddings |
+| **Phase 4** | **TODO** | Production Intelligence — runtime telemetry, self-tuning retrieval, multi-repo graph, observability |
+
+### Branch Map
+
+| Branch | Purpose | Merged to main? |
+|--------|---------|-----------------|
+| `feat/mvp-implementation` | Initial MVP (scanner, parser, pipeline, validator) | No |
+| `fix/code-quality-improvements` | Code quality fixes | No |
+| `feat/symbol-graph-builder` | Symbol graph builder + parser enhancements | No |
+| `docs/mvp-and-roadmap` | MVP documentation | No |
+
+---
+
 ## 1. System Overview
 
 ### 1.1 Mục tiêu
@@ -895,50 +944,89 @@ Example:
 
 ### Phase 1 (MVP) — Ordered by dependency
 
-```
-Step 1: Data model
-  - SymbolNode, SymbolEdge với stable path-based IDs
-  - EdgeKind enum (minimal: imports, calls, inherits, implements, contains, uses_type)
-  - Confidence metadata
-  Files: kb_agent/models/graph.py (NEW)
+| Step | Status | Description | Key Files |
+|------|--------|-------------|-----------|
+| Step 1 | **DONE** `745c0e9` | Data model: SymbolNode, SymbolEdge, EdgeKind, confidence metadata | `kb_agent/models/graph.py` (NEW), `kb_agent/parser/base.py` (CallInfo, TypeUsageInfo, bases) |
+| Step 2 | **DONE** `745c0e9` | Parser enhancements: extract calls (9 resolution methods), type usage, base classes for all 3 languages | `kb_agent/parser/python_parser.py`, `csharp_parser.py`, `cpp_parser.py` |
+| Step 3 | **DONE** `745c0e9` | Graph builder: 7-phase build, graduated confidence edges, 4 optimization indexes (O(1) lookups, O(log N) enclosing node), JSONL + adjacency storage | `kb_agent/graph/builder.py` (NEW), `kb_agent/graph/storage.py` (NEW) |
+| Step 4 | **DONE** | Materialized views: 4 view builders (ARCH/MOD/FILE/MEM) derived from graph, configurable depth, import weighting, utility suppression | `kb_agent/views/base.py`, `arch_view.py`, `mod_view.py`, `file_view.py`, `mem_view.py` (NEW) |
+| Step 5 | **TODO** | Retrieval engine: graph expansion (bounded traversal), context composition (adaptive token budget), semantic + graph hybrid | `kb_agent/query/engine.py` (MODIFY) |
+| Step 6 | **DONE** | Pipeline integration: `--with-graph` + `--depth` CLI flags, pipeline branches views vs old layers | `kb_agent/analyzer/pipeline.py`, `scripts/cli.py` |
+| Step 7 | **DONE** | Tests: 20 view tests + 14 graph builder tests + 3 storage tests — 95/95 all pass | `tests/test_views.py` (NEW), `tests/test_graph_builder.py`, `tests/test_graph_storage.py` |
 
-Step 2: Parser enhancements
-  - Extract calls (heuristic, name-matching)
-  - Extract type usage (from annotations)
-  - Resolve imports to file paths
-  Files: kb_agent/parser/python_parser.py, csharp_parser.py, cpp_parser.py
+#### Completed Work Details (Steps 1-4, 6-7)
 
-Step 3: Graph builder
-  - Build adjacency list from parser output
-  - Edge resolution with confidence scoring
-  - Store graph as JSONL
-  Files: kb_agent/graph/builder.py (NEW)
+**Data Models (`kb_agent/models/graph.py`)**
+- `EdgeKind` enum: IMPORTS, CALLS, INHERITS, IMPLEMENTS, CONTAINS, USES_TYPE
+- `SymbolNode`: id, name, kind, language, path, line_start/end, signature, modifiers, parameters, return_type, docstring
+- `SymbolEdge`: source, target, kind, confidence (0.0-1.0), source_type, resolution
 
-Step 4: Materialized views
-  - ARCH view (from graph, similar to current)
-  - MOD view (configurable depth + import weighting)
-  - FILE view (NEW: per-file subgraph)
-  - MEM view (with file context)
-  Files: kb_agent/views/ (NEW directory)
+**Parser Enhancements (all 3 languages)**
+- `_extract_calls()`: walk AST for call nodes, resolve with 9 methods (same_scope, same_file, direct_import, constructor, static_call, aliased_import, dynamic_dispatch, callback, unresolved)
+- `_extract_type_usages()`: extract type refs from parameters, return types, annotations
+- Base class extraction: Python (`argument_list`), C# (`base_list`), C++ (`base_class_clause`)
 
-Step 5: Retrieval engine
-  - Semantic search (FAISS, same as current)
-  - Graph expansion (bounded traversal)
-  - Context composition (token budget allocation)
-  Files: kb_agent/query/engine.py (MODIFY)
+**Graph Builder (`kb_agent/graph/builder.py`)**
 
-Step 6: Pipeline integration
-  - Wire everything together
-  - CLI commands updated
-  - Incremental update support
-  Files: kb_agent/pipeline.py (MODIFY)
+7-phase build pipeline:
+1. `_build_import_map()` — resolve imports to source files
+2. `_create_nodes_from_symbols()` — stable path-based IDs with dedup
+3. `_create_contains_edges()` — class → method (confidence 1.0)
+4. `_create_imports_edges()` — file → imported symbols (confidence 0.95)
+5. `_resolve_calls_edges()` — graduated confidence by resolution method
+6. `_create_type_usage_edges()` — type annotations (confidence 0.80)
+7. `_create_inheritance_edges()` — base classes (confidence 0.95)
 
-Step 7: Tests + validation
-  - Graph validation checks
-  - Edge confidence validation
-  - Retrieval quality tests
-  Files: tests/ (MODIFY)
-```
+4 optimization indexes:
+- `_file_symbol_map` — O(1) symbol lookup within file
+- `_child_to_parent` — O(1) reverse CONTAINS lookup
+- `_class_children` — O(1) method lookup within class
+- `_sorted_file_nodes` — binary search for enclosing node (O(log N))
+
+#### Completed: Materialized Views (Step 4)
+
+**`kb_agent/views/base.py` — ViewIDMapper + ViewBuilder**
+- `ViewIDMapper`: shared lookup indexes (node_by_id, nodes_by_path, edges_by_source/target)
+- `group_nodes_by_depth(depth)`: replaces hardcoded `parts[0]` grouping
+- `is_utility_name()`: regex-based utility detection (log, config, util, helper, metrics, etc.)
+- `sanitize_path()`: path → safe filename for entry IDs
+
+**`kb_agent/views/arch_view.py` — ArchViewBuilder**
+- Produces 1 KBEntry (`arch.root`) from graph aggregates
+- Language counts, edge counts by kind, entry point detection (main, __init__.py)
+
+**`kb_agent/views/mod_view.py` — ModViewBuilder**
+- Configurable depth grouping (`--depth` option)
+- Import weighting: business=1.0, utility=0.1, stdlib=0.0
+- Utility edge suppression before clustering
+- ID format: `mod.{module_key}`
+
+**`kb_agent/views/file_view.py` — FileViewBuilder** (NEW view type)
+- 1 entry per unique file path
+- Intra-file edge extraction + external dependency listing
+- ID format: `file.{sanitized_path}`
+
+**`kb_agent/views/mem_view.py` — MemViewBuilder**
+- 1 entry per SymbolNode with outgoing edge info (calls, uses_type)
+- Backward-compatible ID format: `mem.{module}.{file}.{parent}.{name}_L{line}`
+- Includes parent class name for methods (from CONTAINS edges)
+
+**Model changes:**
+- `Layer.FILE = "file"` added to enum
+- `KBStats.by_layer` default includes `"file": 0`
+
+**Pipeline changes:**
+- `run()` branches: `--with-graph` → materialize views, else → old layers (unchanged)
+- `_materialize_views()`: loads graph → creates ViewIDMapper → builds ARCH → MOD → FILE → MEM → links
+- `_run_layers()`: wraps old arch/mod/mem layers (backward compat)
+
+#### Next Step (Step 5)
+
+**Retrieval Engine**
+- Semantic search (FAISS) → graph expansion → context composition
+- Bounded traversal: max 2 hops, max 15 nodes, confidence >= 0.60
+- Adaptive token budget: 4000 tokens, query-intent-driven allocation
+- Utility suppression: config/logging/metrics → lowest priority
 
 ### Phase 2 — Ordered by impact
 
@@ -1008,32 +1096,37 @@ Current state:
 
 Migration steps:
 
-1. ADD graph models alongside existing models
+1. [DONE] ADD graph models alongside existing models
    - New: SymbolNode, SymbolEdge
    - Keep: KBEntry (used as view output format)
    - No breaking changes
 
-2. ADD graph builder after parse step
+2. [DONE] ADD graph builder after parse step
    - Pipeline: SCAN → PARSE → BUILD_GRAPH → ... → WRITE_VIEWS
    - Graph is built from parser output (same data source)
+   - Opt-in via --with-graph flag
 
-3. MODIFY mod_layer to use graph for grouping
-   - Replace parts[0] grouping with graph-based clustering
+3. [DONE] MODIFY mod_layer to use graph for grouping
+   - Configurable depth grouping replaces parts[0]
    - Import weighting from graph edges
+   - Utility edge suppression
 
-4. ADD FILE view between MOD and MEM
-   - New view type, doesn't break existing MEM
+4. [DONE] ADD FILE view between MOD and MEM
+   - `FileViewBuilder` produces per-file KBEntry with intra/external edges
+   - `Layer.FILE = "file"` added to enum
 
-5. MODIFY MEM to receive file context
-   - FILE view output feeds into MEM analysis
+5. [DONE] MODIFY MEM to receive file context
+   - `MemViewBuilder` includes outgoing edge info (calls, uses_type) in LLM prompts
+   - Backward-compatible IDs
 
-6. MODIFY query engine for graph traversal
+6. [TODO] MODIFY query engine for graph traversal
    - Add graph expansion step after semantic search
+   - Bounded traversal + context composition
 
-7. UPDATE storage format
-   - Add .kb/graph/ directory
-   - Add .kb/views/file/ directory
-   - Existing .kb/entries/ can be migrated or kept
+7. [DONE] UPDATE storage format
+   - .kb/graph/ directory created (nodes.jsonl, edges.jsonl, adjacency.json)
+   - .kb/entries/ contains arch, mod, file, and mem entries when --with-graph
+   - Existing .kb/entries/ kept as-is when --with-graph not set
 ```
 
 ### 8.2 Backward Compatibility

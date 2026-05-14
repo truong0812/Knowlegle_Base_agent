@@ -67,6 +67,7 @@ def analyze(
     out: Path = typer.Option(Path(".kb"), help="Output directory"),
     skip_ai: bool = typer.Option(False, help="Skip LLM analysis (static only)"),
     with_graph: bool = typer.Option(False, help="Build symbol graph with edge resolution"),
+    depth: int = typer.Option(1, help="Module grouping depth (1=src/, 2=src/services/)"),
     model: str = typer.Option("gpt-4o", help="LLM model name"),
 ) -> None:
     """Run full 3-layer analysis pipeline (scan → parse → analyze)."""
@@ -79,7 +80,7 @@ def analyze(
     llm_client = None if skip_ai else LLMClient(model=model, cache_dir=out / ".cache")
     pipeline = AnalysisPipeline(
         repo_root=repo, out_dir=out, llm_client=llm_client,
-        build_graph=with_graph,
+        build_graph=with_graph, module_depth=depth,
     )
     manifest = asyncio.run(pipeline.run())
 
