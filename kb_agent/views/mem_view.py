@@ -132,7 +132,7 @@ class MemViewBuilder(ViewBuilder):
         return lookup
 
     @staticmethod
-    def _depth(mod_entries: list[KBEntry]) -> int:
+    def _depth(mod_entries: list[KBEntry] | None = None) -> int:
         if not mod_entries:
             return 1
         sample = mod_entries[0]
