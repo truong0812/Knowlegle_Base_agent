@@ -5,7 +5,7 @@ from pathlib import Path
 
 from kb_agent.analyzer.llm import LLMClient
 from kb_agent.models.entry import AIData, KBEntry, Layer, StaticData, SymbolKind
-from kb_agent.models.graph import EdgeKind, SymbolEdge, SymbolNode
+from kb_agent.models.graph import EdgeKind, SymbolNode
 
 from .base import ViewBuilder, ViewIDMapper
 
@@ -32,7 +32,6 @@ class MemViewBuilder(ViewBuilder):
 
     async def build(self, **kwargs) -> list[KBEntry]:
         nodes: list[SymbolNode] = kwargs["nodes"]
-        edges: list[SymbolEdge] = kwargs["edges"]
         mod_entries: list[KBEntry] = kwargs.get("mod_entries", [])
         file_entries: list[KBEntry] = kwargs.get("file_entries", [])
 
@@ -46,14 +45,10 @@ class MemViewBuilder(ViewBuilder):
             types_used = [self._short_id(e.target) for e in outgoing if e.kind == EdgeKind.USES_TYPE]
 
             module_key = self._mapper.find_module_for_file(node.path, self._depth(mod_entries))
-            mod_id = None
-            for m in mod_entries:
-                if node.path in (m.static.files or []):
-                    mod_id = m.id
-                    break
+            mod_id = mod_for_file.get(node.path)
 
             mod_summary = mod_summaries.get(mod_id or "", "")
-            parent_name = self._find_parent_name(node, edges)
+            parent_name = self._find_parent_name(node)
 
             entry_id = self._build_entry_id(node, module_key, parent_name)
 
@@ -116,9 +111,10 @@ class MemViewBuilder(ViewBuilder):
         base_id = ".".join(parts)
         return f"{base_id}_L{node.line_start}"
 
-    def _find_parent_name(self, node: SymbolNode, edges: list[SymbolEdge]) -> str | None:
-        for e in edges:
-            if e.target == node.id and e.kind == EdgeKind.CONTAINS:
+    def _find_parent_name(self, node: SymbolNode) -> str | None:
+        incoming = self._mapper.edges_by_target.get(node.id, [])
+        for e in incoming:
+            if e.kind == EdgeKind.CONTAINS:
                 parent = self._mapper.node_by_id.get(e.source)
                 if parent:
                     return parent.name

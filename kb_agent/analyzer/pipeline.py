@@ -53,8 +53,12 @@ class AnalysisPipeline:
 
         # 2.5. Build symbol graph (opt-in)
         if self._build_graph:
-            self._build_and_save_graph(parse_results)
-            all_entries = await self._materialize_views(parse_results)
+            try:
+                self._build_and_save_graph(parse_results)
+                all_entries = await self._materialize_views(parse_results)
+            except Exception as exc:
+                logger.error("Graph-based analysis failed, falling back to layers: %s", exc)
+                all_entries = await self._run_layers(file_entries, parse_results)
         else:
             all_entries = await self._run_layers(file_entries, parse_results)
 

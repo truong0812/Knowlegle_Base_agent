@@ -37,16 +37,20 @@ class FileViewBuilder(ViewBuilder):
         mod_entries: list[KBEntry] = kwargs.get("mod_entries", [])
 
         mod_for_file = self._build_mod_lookup(mod_entries)
+        mod_summaries = {m.id: m.ai.summary or "" for m in mod_entries}
+
+        # Pre-classify edges: node_id -> file_path lookup
+        node_to_file = self._build_node_to_file_map()
+        edge_by_file = self._classify_edges_by_file(edges, node_to_file)
 
         entries: list[KBEntry] = []
         for file_path, node_ids in self._mapper.nodes_by_path.items():
-            file_node_ids = set(node_ids)
             file_nodes = [self._mapper.node_by_id[nid] for nid in node_ids if nid in self._mapper.node_by_id]
 
             if not file_nodes:
                 continue
 
-            intra, external = self._classify_edges(file_path, file_node_ids, edges)
+            intra, external = edge_by_file.get(file_path, ([], []))
 
             lang = file_nodes[0].language
             line_start = min(n.line_start for n in file_nodes)
@@ -61,10 +65,7 @@ class FileViewBuilder(ViewBuilder):
                     ext_targets.add(f"{t.name} ({t.path})")
 
             mod_id = mod_for_file.get(file_path)
-            mod_summary = ""
-            for m in mod_entries:
-                if m.id == mod_id and m.ai.summary:
-                    mod_summary = m.ai.summary
+            mod_summary = mod_summaries.get(mod_id or "", "")
 
             ai_data = AIData()
             if self._llm:
@@ -113,26 +114,42 @@ class FileViewBuilder(ViewBuilder):
 
         return entries
 
+    def _build_node_to_file_map(self) -> dict[str, str]:
+        """Pre-build node_id -> file_path for O(1) edge classification."""
+        mapping: dict[str, str] = {}
+        for file_path, node_ids in self._mapper.nodes_by_path.items():
+            for nid in node_ids:
+                mapping[nid] = file_path
+        return mapping
+
+    def _classify_edges_by_file(
+        self, edges: list[SymbolEdge], node_to_file: dict[str, str],
+    ) -> dict[str, tuple[list[SymbolEdge], list[SymbolEdge]]]:
+        """Classify all edges into intra/external per file in a single pass."""
+        result: dict[str, tuple[list[SymbolEdge], list[SymbolEdge]]] = {}
+        for e in edges:
+            src_file = node_to_file.get(e.source)
+            tgt_file = node_to_file.get(e.target)
+            if src_file is None and tgt_file is None:
+                continue
+            if src_file and src_file == tgt_file:
+                intra, ext = result.setdefault(src_file, ([], []))
+                intra.append(e)
+            else:
+                if src_file:
+                    _, ext = result.setdefault(src_file, ([], []))
+                    ext.append(e)
+                if tgt_file and tgt_file != src_file:
+                    _, ext = result.setdefault(tgt_file, ([], []))
+                    ext.append(e)
+        return result
+
     def _build_mod_lookup(self, mod_entries: list[KBEntry]) -> dict[str, str | None]:
         lookup: dict[str, str | None] = {}
         for mod in mod_entries:
             for fp in (mod.static.files or []):
                 lookup[fp] = mod.id
         return lookup
-
-    def _classify_edges(
-        self, file_path: str, file_node_ids: set[str], edges: list[SymbolEdge],
-    ) -> tuple[list[SymbolEdge], list[SymbolEdge]]:
-        intra: list[SymbolEdge] = []
-        external: list[SymbolEdge] = []
-        for e in edges:
-            src_in = e.source in file_node_ids
-            tgt_in = e.target in file_node_ids
-            if src_in and tgt_in:
-                intra.append(e)
-            elif src_in or tgt_in:
-                external.append(e)
-        return intra, external
 
     def _build_symbol_tree(self, nodes: list[SymbolNode]) -> str:
         lines: list[str] = []
