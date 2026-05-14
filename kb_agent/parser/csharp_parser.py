@@ -4,7 +4,7 @@ import tree_sitter_c_sharp as tscs
 from tree_sitter import Language as TSLanguage, Parser, Node
 
 from kb_agent.models.entry import Language, Parameter, SymbolKind
-from kb_agent.parser.base import BaseParser, ImportInfo, ParseResult, SymbolInfo
+from kb_agent.parser.base import BaseParser, CallInfo, ImportInfo, ParseResult, SymbolInfo, TypeUsageInfo
 
 
 class CSharpParser(BaseParser):
@@ -18,11 +18,15 @@ class CSharpParser(BaseParser):
 
         symbols = self.extract_symbols(tree.root_node)
         imports = self.extract_imports(tree.root_node)
+        calls = self._extract_calls(tree.root_node, symbols)
+        type_usages = self._extract_type_usages(symbols)
         return ParseResult(
             file_path=file_path,
             language=Language.CSHARP,
             symbols=symbols,
             imports=imports,
+            calls=calls,
+            type_usages=type_usages,
             errors=errors,
         )
 
@@ -52,6 +56,14 @@ class CSharpParser(BaseParser):
 
         modifiers = self._extract_modifiers(node)
 
+        # Extract base classes/interfaces from base_list
+        bases: list[str] = []
+        for child in node.children:
+            if child.type == "base_list":
+                for bc in child.children:
+                    if bc.type in ("identifier", "qualified_name", "type_name", "generic_name"):
+                        bases.append(self._node_text(bc))
+
         children: list[SymbolInfo] = []
         body = self._get_body(node)
         if body:
@@ -74,6 +86,7 @@ class CSharpParser(BaseParser):
             signature=sig,
             modifiers=modifiers,
             children=children,
+            bases=bases,
         )
 
     def _extract_method(self, node: Node, is_ctor: bool = False) -> SymbolInfo:
@@ -186,3 +199,127 @@ class CSharpParser(BaseParser):
         if p.type:
             return f"{p.type} {p.name}"
         return p.name
+
+    def _extract_calls(self, root_node: Node, symbols: list[SymbolInfo]) -> list[CallInfo]:
+        """Walk AST for invocation and object creation expressions."""
+        class_names = {s.name for s in symbols if s.kind in (SymbolKind.CLASS, SymbolKind.STRUCT)}
+        local_method_names: set[str] = set()
+        for cls in symbols:
+            if cls.kind in (SymbolKind.CLASS, SymbolKind.STRUCT):
+                for m in cls.children:
+                    local_method_names.add(m.name)
+
+        calls: list[CallInfo] = []
+        self._walk_for_calls(root_node, calls, class_names, local_method_names)
+        return calls
+
+    def _walk_for_calls(
+        self, node: Node, out: list[CallInfo],
+        class_names: set[str], local_names: set[str],
+    ) -> None:
+        for child in node.children:
+            if child.type == "invocation_expression":
+                call_info = self._resolve_csharp_call(child, class_names, local_names)
+                if call_info:
+                    out.append(call_info)
+            elif child.type == "object_creation_expression":
+                call_info = self._resolve_csharp_constructor(child, class_names)
+                if call_info:
+                    out.append(call_info)
+            self._walk_for_calls(child, out, class_names, local_names)
+
+    def _resolve_csharp_call(
+        self, node: Node, class_names: set[str], local_names: set[str],
+    ) -> CallInfo | None:
+        func = node.child_by_field_name("function")
+        if not func:
+            return None
+
+        line = node.start_point[0] + 1
+
+        if func.type == "member_access_expression":
+            expr = func.child_by_field_name("expression")
+            name = func.child_by_field_name("name")
+            receiver = self._node_text(expr) if expr else None
+            callee = self._node_text(name) if name else "<unknown>"
+
+            if receiver == "this":
+                return CallInfo(
+                    caller_name="", callee_name=callee, line=line,
+                    resolution_method="same_scope", is_self_call=True, receiver="this",
+                )
+            if receiver in class_names:
+                return CallInfo(
+                    caller_name="", callee_name=callee, line=line,
+                    resolution_method="static_call", receiver=receiver,
+                )
+            return CallInfo(
+                caller_name="", callee_name=callee, line=line,
+                resolution_method="dynamic_dispatch", receiver=receiver,
+            )
+
+        if func.type == "identifier":
+            callee = self._node_text(func)
+            if callee in class_names:
+                return CallInfo(
+                    caller_name="", callee_name=callee, line=line,
+                    resolution_method="constructor",
+                )
+            if callee in local_names:
+                return CallInfo(
+                    caller_name="", callee_name=callee, line=line,
+                    resolution_method="same_file",
+                )
+            return CallInfo(
+                caller_name="", callee_name=callee, line=line,
+                resolution_method="unresolved",
+            )
+
+        return None
+
+    def _resolve_csharp_constructor(
+        self, node: Node, class_names: set[str],
+    ) -> CallInfo | None:
+        type_node = node.child_by_field_name("type")
+        if not type_node:
+            return None
+        callee = self._node_text(type_node)
+        line = node.start_point[0] + 1
+        if callee in class_names:
+            return CallInfo(
+                caller_name="", callee_name=callee, line=line,
+                resolution_method="constructor",
+            )
+        return CallInfo(
+            caller_name="", callee_name=callee, line=line,
+            resolution_method="unresolved",
+        )
+
+    def _extract_type_usages(self, symbols: list[SymbolInfo]) -> list[TypeUsageInfo]:
+        """Extract type references from parameters, return types, properties."""
+        usages: list[TypeUsageInfo] = []
+        for sym in symbols:
+            if sym.return_type:
+                usages.append(TypeUsageInfo(
+                    symbol_name=sym.name, type_name=sym.return_type,
+                    usage_context="return_type", line=sym.line_start,
+                ))
+            for p in sym.parameters:
+                if p.type:
+                    usages.append(TypeUsageInfo(
+                        symbol_name=sym.name, type_name=p.type,
+                        usage_context="parameter", line=sym.line_start,
+                    ))
+            for child in sym.children:
+                if child.return_type:
+                    usages.append(TypeUsageInfo(
+                        symbol_name=child.name, type_name=child.return_type,
+                        usage_context="return_type", line=child.line_start,
+                    ))
+                for p in child.parameters:
+                    if p.type:
+                        usages.append(TypeUsageInfo(
+                            symbol_name=child.name, type_name=p.type,
+                            usage_context="parameter", line=child.line_start,
+                        ))
+        return usages
