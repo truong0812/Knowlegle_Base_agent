@@ -16,25 +16,27 @@
 | **Step 2** | Parser enhancements (calls, type usage, bases) | **DONE** | `feat/symbol-graph-builder` | All 3 parsers: Python, C#, C++ — 9 resolution methods |
 | **Step 3** | Graph builder + storage | **DONE** | `feat/symbol-graph-builder` | `builder.py` (7-phase build + 4 optimization indexes), `storage.py` (JSONL + adjacency) |
 | **Step 4** | Materialized views (ARCH/MOD/FILE/MEM from graph) | **DONE** | `feat/symbol-graph-builder` | `kb_agent/views/` — 4 view builders with configurable depth + import weighting |
-| **Step 5** | Retrieval engine (semantic + graph expansion) | **TODO** | — | Bounded traversal, context composition, adaptive token budget |
+| **Step 5** | Retrieval engine (semantic + graph expansion) | **DONE** | `feat/retrieval-engine` | `kb_agent/query/retrieval.py`, `expander.py`, `composer.py`, `intent.py`, `mapper.py` |
 | **Step 6** | Pipeline integration | **DONE** | `feat/symbol-graph-builder` | `--with-graph` + `--depth` flags in CLI, pipeline branches views vs old layers |
 | **Step 7** | Tests + validation | **DONE** | `feat/symbol-graph-builder` | 20 view tests + 14 graph builder tests + 3 storage tests — 95/95 all pass |
 
 ### Phase 1 Summary
 
-**Completed:** Steps 1, 2, 3, 4, 6, 7 (Symbol Graph Builder + Materialized Views)
+**Completed:** Steps 1, 2, 3, 4, 5, 6, 7 — **MVP Phase 1 fully complete**
 
 - `--with-graph`: graph builder → 4 materialized views (ARCH/MOD/FILE/MEM)
 - Without flag: old layer-based approach unchanged (zero breaking changes)
-- 95/95 tests pass
+- 122/122 tests pass (95 graph + 27 retrieval)
 - New `FILE` layer added to `Layer` enum
 - `--depth N` option for configurable module grouping
 
-**Remaining:** Step 5 (Retrieval Engine)
+**Completed:** Step 5 (Retrieval Engine)
 
-- Graph expansion with bounded traversal (max 2 hops, 15 nodes)
-- Context composition with adaptive token budget (~4000 tokens)
-- Utility suppression + confidence-based edge filtering
+- `RetrievalEngine` wraps `QueryEngine` for graph-aware retrieval
+- Bounded BFS expansion: max 2 hops, 15 nodes, confidence >= 0.60
+- Context composition: adaptive token budget (~4000 tokens), query-intent-driven
+- Utility suppression + bidirectional traversal (incoming + outgoing edges)
+- CLI: `query --with-graph` flag, backward-compatible fallback
 
 ### Phase 2–4 Status
 
@@ -950,7 +952,7 @@ Example:
 | Step 2 | **DONE** `745c0e9` | Parser enhancements: extract calls (9 resolution methods), type usage, base classes for all 3 languages | `kb_agent/parser/python_parser.py`, `csharp_parser.py`, `cpp_parser.py` |
 | Step 3 | **DONE** `745c0e9` | Graph builder: 7-phase build, graduated confidence edges, 4 optimization indexes (O(1) lookups, O(log N) enclosing node), JSONL + adjacency storage | `kb_agent/graph/builder.py` (NEW), `kb_agent/graph/storage.py` (NEW) |
 | Step 4 | **DONE** | Materialized views: 4 view builders (ARCH/MOD/FILE/MEM) derived from graph, configurable depth, import weighting, utility suppression | `kb_agent/views/base.py`, `arch_view.py`, `mod_view.py`, `file_view.py`, `mem_view.py` (NEW) |
-| Step 5 | **TODO** | Retrieval engine: graph expansion (bounded traversal), context composition (adaptive token budget), semantic + graph hybrid | `kb_agent/query/engine.py` (MODIFY) |
+| Step 5 | **DONE** | Retrieval engine: graph expansion (bounded BFS), context composition (adaptive token budget), intent classification, entry-to-node mapping | `kb_agent/query/retrieval.py`, `expander.py`, `composer.py`, `intent.py`, `mapper.py` (NEW) |
 | Step 6 | **DONE** | Pipeline integration: `--with-graph` + `--depth` CLI flags, pipeline branches views vs old layers | `kb_agent/analyzer/pipeline.py`, `scripts/cli.py` |
 | Step 7 | **DONE** | Tests: 20 view tests + 14 graph builder tests + 3 storage tests — 95/95 all pass | `tests/test_views.py` (NEW), `tests/test_graph_builder.py`, `tests/test_graph_storage.py` |
 
@@ -1020,13 +1022,35 @@ Example:
 - `_materialize_views()`: loads graph → creates ViewIDMapper → builds ARCH → MOD → FILE → MEM → links
 - `_run_layers()`: wraps old arch/mod/mem layers (backward compat)
 
-#### Next Step (Step 5)
+#### Completed: Retrieval Engine (Step 5)
 
-**Retrieval Engine**
-- Semantic search (FAISS) → graph expansion → context composition
-- Bounded traversal: max 2 hops, max 15 nodes, confidence >= 0.60
-- Adaptive token budget: 4000 tokens, query-intent-driven allocation
-- Utility suppression: config/logging/metrics → lowest priority
+**`kb_agent/query/intent.py` — Query Intent Classification**
+- `QueryIntent` enum: SYMBOL_LOOKUP, FLOW_TRACE, MODULE_OVERVIEW, RELATIONSHIP, DEFAULT
+- `INTENT_BUDGET_RATIOS`: token budget ratios per intent (entry/hop1/hop2/meta)
+- `classify_intent()`: keyword-based, specificity-ordered
+
+**`kb_agent/query/mapper.py` — Entry-to-Node Mapping**
+- `build_entry_to_node_mapper()`: join FAISS results to graph nodes via (path, line_start)
+- Returns None when no graph → graceful fallback to FAISS-only
+- Handles collisions by preferring narrower line range
+
+**`kb_agent/query/expander.py` — Graph Expansion**
+- `expand_from_seeds()`: bounded BFS from seed nodes using ViewIDMapper indexes
+- Bidirectional traversal (outgoing + incoming edges)
+- Utility suppression, confidence filtering, max edges per node
+- Returns `ExpandedSubgraph` with seed/hop1/hop2 nodes + relevant edges
+
+**`kb_agent/query/composer.py` — Context Composition**
+- `compose_context()`: adaptive token budget, 3 detail tiers (full/summary/minimal)
+- `RetrievalResult` + `RetrievalMetrics` for instrumentation
+- Edge summary formatting, truncation priority (2-hop → 1-hop → entry)
+
+**`kb_agent/query/retrieval.py` — RetrievalEngine Orchestrator**
+- Wraps `QueryEngine`, adds graph expansion + context composition
+- Lazy `ViewIDMapper` loading, cached across calls
+- Graceful fallback: no graph → format FAISS results directly
+
+**CLI:** `query --with-graph` flag added to `scripts/cli.py`
 
 ### Phase 2 — Ordered by impact
 
@@ -1119,9 +1143,9 @@ Migration steps:
    - `MemViewBuilder` includes outgoing edge info (calls, uses_type) in LLM prompts
    - Backward-compatible IDs
 
-6. [TODO] MODIFY query engine for graph traversal
-   - Add graph expansion step after semantic search
-   - Bounded traversal + context composition
+6. [DONE] MODIFY query engine for graph traversal
+   - RetrievalEngine wraps QueryEngine for graph-aware retrieval
+   - `query --with-graph` CLI flag, backward-compatible
 
 7. [DONE] UPDATE storage format
    - .kb/graph/ directory created (nodes.jsonl, edges.jsonl, adjacency.json)

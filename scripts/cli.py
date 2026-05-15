@@ -137,28 +137,43 @@ def query(
     question: str = typer.Argument(help="Question to ask about the codebase"),
     kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
     top_k: int = typer.Option(5, help="Number of results"),
+    with_graph: bool = typer.Option(False, help="Use graph-aware retrieval"),
 ) -> None:
     """Query the knowledge base using semantic search."""
-    from kb_agent.query.engine import QueryEngine
-
     kb = kb.resolve()
-    engine = QueryEngine(kb)
 
-    try:
-        results = engine.query(question, top_k=top_k)
-    except FileNotFoundError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
+    if with_graph:
+        from kb_agent.query.retrieval import RetrievalEngine
 
-    typer.echo(f"Top {len(results)} results for: '{question}'\n")
-    for entry in results:
-        typer.echo(f"[{entry.layer.value}] {entry.id}")
-        if entry.static.signature:
-            typer.echo(f"  {entry.static.signature}")
-        if entry.ai.summary:
-            typer.echo(f"  {entry.ai.summary}")
-        typer.echo(f"  {entry.static.path}:{entry.static.line_start}")
-        typer.echo()
+        engine = RetrievalEngine(kb)
+        try:
+            result = engine.retrieve(question, top_k=top_k)
+        except FileNotFoundError as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(1)
+
+        typer.echo(result.context)
+        if result.metrics.truncated:
+            typer.echo(f"\n[Truncated {len(result.metrics.truncated_nodes)} nodes]")
+    else:
+        from kb_agent.query.engine import QueryEngine
+
+        engine = QueryEngine(kb)
+        try:
+            results = engine.query(question, top_k=top_k)
+        except FileNotFoundError as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(1)
+
+        typer.echo(f"Top {len(results)} results for: '{question}'\n")
+        for entry in results:
+            typer.echo(f"[{entry.layer.value}] {entry.id}")
+            if entry.static.signature:
+                typer.echo(f"  {entry.static.signature}")
+            if entry.ai.summary:
+                typer.echo(f"  {entry.ai.summary}")
+            typer.echo(f"  {entry.static.path}:{entry.static.line_start}")
+            typer.echo()
 
 
 if __name__ == "__main__":
