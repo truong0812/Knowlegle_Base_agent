@@ -1,190 +1,169 @@
 # Knowledge Base Agent
 
-**Codebase → Structured Knowledge Base**, phục vụ các AI agent khác tra cứu và reasoning về code.
+Knowledge Base Agent turns a source repository into a structured, queryable knowledge base for other AI agents. The project is built around a deterministic-first pipeline: parse source code, build a symbol graph, materialize useful KB views, then use embeddings and graph expansion for retrieval.
 
-## Vấn đề
+## Current Status
 
-Khi một AI agent cần hiểu codebase (ví dụ: code review agent, debugging agent, onboarding agent), nó phải tự đọc và phân tích source code — tốn context, dễ sai, không tái sử dụng được.
+MVP is implemented and tested.
 
-**Knowledge Base Agent** giải quyết bằng cách **phân tích codebase một lần, sinh ra knowledge base có cấu trúc** mà các agent khác có thể query.
+- Scanner and language detection for Python, C#, and C++.
+- Tree-sitter based parsers, with Python AST fallback.
+- Legacy layered analysis: `arch`, `mod`, `mem`.
+- Graph-aware analysis: symbol graph plus `arch`, `mod`, `file`, and `mem` materialized views.
+- FAISS semantic index and graph-aware retrieval.
+- CLI commands for scan, parse, analyze, validate, index, and query.
+- Test suite status on 2026-05-15: `129 passed`.
 
-## Cách tiếp cận: Layered Analysis
-
-Thay vì ném toàn bộ codebase vào LLM (→ hallucination), agent phân tích theo **3 layer**, mỗi layer có context giới hạn và kết quả layer trên làm input cho layer dưới:
-
-```
-Layer 1 — Architecture (repo-level)
-  Input: folder structure, manifests, file list
-  Output: packages, entry points, module dependency map
-
-Layer 2 — Module (file/folder-level)
-  Input: source code của 1 module + kết quả Layer 1
-  Output: public API surface (classes, interfaces, exports)
-
-Layer 3 — Unit/Member (class/function-level)
-  Input: 1 class/function + kết quả Layer 2
-  Output: signature, behavior, summary
-```
-
-Mỗi entry trong KB tách rõ nguồn dữ liệu:
-
-- **`static`**: đến từ parser (AST) — deterministic, có thể verify tự động
-- **`ai`**: đến từ LLM — cần confidence score, có thể review
-
-## Ngôn ngữ MVP
-
-| Ngôn ngữ | Parser | Lý do chọn |
-|---|---|---|
-| **Python** | `ast` + tree-sitter | Built-in AST, dễ bắt đầu |
-| **C#** | tree-sitter | Ngôn ngữ enterprise phổ biến |
-| **C++** | tree-sitter | Hard case — validate thiết kế |
-
-## Output
-
-```
-.kb/
-├── entries/                    # JSON entries, mỗi symbol 1 file
-│   ├── arch.myapp.json
-│   ├── mod.myapp.services.json
-│   └── mem.myapp.services.userservice.createuser.json
-├── index/                      # FAISS vector index
-│   └── faiss.index
-└── manifest.json               # Metadata toàn KB
-```
-
-Mỗi entry có schema:
-
-```json
-{
-  "id": "myapp.services.userservice.createuser",
-  "layer": "member",
-  "parent": "myapp.services.userservice",
-
-  "static": {
-    "signature": "public User CreateUser(string name, string email)",
-    "path": "src/Services/UserService.cs",
-    "language": "csharp",
-    "line_start": 45,
-    "line_end": 62,
-    "kind": "method",
-    "modifiers": ["public", "async"],
-    "parameters": [
-      {"name": "name", "type": "string"},
-      {"name": "email", "type": "string"}
-    ],
-    "return_type": "User"
-  },
-
-  "ai": {
-    "summary": "Creates a new user with validation and sends welcome email",
-    "purpose": "Entry point for user registration flow",
-    "behavior": ["Validate input", "Check duplicate email", "Persist user", "Send welcome email"],
-    "tags": ["user-management", "registration"],
-    "confidence": 0.85
-  }
-}
-```
-
-## Quick Start
-
-**Yêu cầu**: Python 3.10+
+The graph path is the recommended path for new snapshots:
 
 ```bash
-python -m venv .venv && source .venv/bin/activate  # Windows: .venv\Scripts\activate
+python -m scripts.cli analyze --repo . --out .kb --skip-ai --with-graph --depth 2
+python -m scripts.cli validate --kb .kb
+python -m scripts.cli query "How does retrieval work?" --kb .kb --with-graph
+```
+
+Latest local graph snapshot, rebuilt on 2026-05-15:
+
+- 521 KB entries
+- Layers: `arch: 1`, `mod: 24`, `file: 50`, `mem: 446`
+- Graph files: `nodes.jsonl`, `edges.jsonl`, `adjacency.json`
+- Index files: `faiss.index`, `id_map.json`
+- Validation: parent consistency and orphan detection pass
+
+## Architecture
+
+The system has two compatible analysis modes.
+
+### Legacy Layered Analysis
+
+```text
+Repository
+  -> scanner
+  -> parsers
+  -> architecture layer
+  -> module layer
+  -> member layer
+  -> KB entries + FAISS index
+```
+
+This path is still supported and is useful as a simple fallback.
+
+### Graph-Aware Analysis
+
+```text
+Repository
+  -> scanner
+  -> parsers
+  -> symbol graph
+  -> materialized views
+     -> ARCH view
+     -> MOD view
+     -> FILE view
+     -> MEM view
+  -> KB entries + FAISS index
+  -> graph-aware retrieval
+```
+
+The symbol graph is the source of truth. KB entries are materialized views optimized for retrieval and agent context.
+
+## Installation
+
+Requires Python 3.10+.
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### Scan — Liệt kê source files
+Optional query dependencies are listed in `requirements.txt`:
+
+- `sentence-transformers`
+- `faiss-cpu`
+
+## CLI Usage
+
+### Scan
 
 ```bash
-python -m scripts.cli scan --repo /path/to/repo
+python -m scripts.cli scan --repo .
 ```
 
-Output:
-```
-Found 38 source files in /path/to/repo
-  python   src/services/user_service.py
-  csharp   src/Services/UserService.cs
-  cpp      src/core/engine.cpp
-```
+Lists supported source files and detected languages.
 
-### Parse — Trích xuất symbols
+### Parse
 
 ```bash
-python -m scripts.cli parse --repo /path/to/repo
+python -m scripts.cli parse --repo .
 ```
 
-Output:
-```
-src/services/user_service.py (python):
-  class      L  7-24  UserService
-             class UserService
-  function   L 13-17  create_user
-             def create_user(name: str, email: str) -> dict
-  import     typing (Optional)
-```
+Prints extracted symbols and imports.
 
-### Analyze — Full pipeline (3 layers)
+### Analyze
+
+Static-only legacy snapshot:
 
 ```bash
-# Static analysis only (không cần OpenAI API key)
-python -m scripts.cli analyze --repo /path/to/repo --out .kb --skip-ai
-
-# Với LLM enrichment (cần OPENAI_API_KEY env var)
-python -m scripts.cli analyze --repo /path/to/repo --out .kb
+python -m scripts.cli analyze --repo . --out .kb --skip-ai
 ```
 
-Output:
-```
-Analysis complete: 205 entries
-  Layers: {'arch': 1, 'mod': 3, 'mem': 201}
-  Languages: python, csharp, cpp
-  Output: .kb
+Static-only graph snapshot:
+
+```bash
+python -m scripts.cli analyze --repo . --out .kb --skip-ai --with-graph --depth 2
 ```
 
-### Validate — Kiểm tra chất lượng KB
+LLM enrichment can be enabled by omitting `--skip-ai` and setting `OPENAI_API_KEY`.
+
+### Validate
 
 ```bash
 python -m scripts.cli validate --kb .kb
 ```
 
-Output:
-```
-Validation report for .kb:
-  Total entries: 205
-  Consistency: 100%
-  [PASS] parent_consistency: All parents consistent
-  [PASS] orphan_detection: No orphans
-```
+Checks parent consistency and orphan entries.
 
-### Query — Semantic search (cần sentence-transformers + faiss-cpu)
+### Query
+
+Flat semantic search:
 
 ```bash
-pip install sentence-transformers faiss-cpu
-python -m scripts.cli query "How does user registration work?" --kb .kb
+python -m scripts.cli query "What does the parser do?" --kb .kb
 ```
 
-### CLI flags
+Graph-aware retrieval:
 
-| Command | Flag | Mô tả |
-|---|---|---|
-| `analyze` | `--skip-ai` | Chỉ static analysis, không gọi LLM |
-| `analyze` | `--model gpt-4o-mini` | Chọn model LLM |
-| `query` | `--top-k 3` | Số kết quả trả về |
+```bash
+python -m scripts.cli query "How does graph retrieval expand context?" --kb .kb --with-graph
+```
 
-## Đánh giá chất lượng
+## Output Layout
 
-| Metric | Cách đo | Mục tiêu |
-|---|---|---|
-| Coverage | % symbols parse thành công | ≥ 90% |
-| Signature accuracy | KB signature vs actual code | ≥ 95% |
-| Consistency | Parent-child đúng hierarchy | 100% |
-| Hallucination rate | Random sample, human check | ≤ 5% |
+```text
+.kb/
+  entries/               JSON KB entries
+  graph/                 nodes, edges, adjacency data when --with-graph is used
+  index/                 FAISS index and ID map
+  manifest.json          snapshot metadata
+  quality_report.json    validation report
+```
 
-## Trạng thái dự án
+In graph mode, `entries/` contains four view layers:
 
-**MVP hoàn tất** — scanner, parser (Python/C#/C++), 3-layer analysis pipeline, validator, CLI đều hoạt động. 41 tests passing. Xem chi tiết tại [docs/MVP.md](docs/MVP.md) và [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
+- `arch`: repository overview
+- `mod`: module-level views grouped by `--depth`
+- `file`: file-level symbol and dependency views
+- `mem`: class/function/member-level views
 
-## License
+## Project Direction
 
-MIT
+The next development phase is Phase 2: Confident Graph.
+
+Recommended order:
+
+1. Enhanced symbol resolution.
+2. Confidence propagation.
+3. Deterministic feature overlay.
+4. Basic query planner and retrieval benchmarks.
+
+See [docs/mvp_and_roadmap.md](docs/mvp_and_roadmap.md) for the longer roadmap.

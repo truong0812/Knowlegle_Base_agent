@@ -26,9 +26,11 @@ def _make_entry(entry_id: str, layer: Layer, summary: str = "test") -> KBEntry:
 
 
 def _write_entry(kb_dir: Path, entry: KBEntry) -> None:
+    from kb_agent.query.engine import entry_filename
+
     entries_dir = kb_dir / "entries"
     entries_dir.mkdir(parents=True, exist_ok=True)
-    filename = entry.id.replace(".", "_") + ".json"
+    filename = entry_filename(entry.id)
     (entries_dir / filename).write_text(entry.model_dump_json(), encoding="utf-8")
 
 
@@ -51,6 +53,11 @@ class TestQueryEngine:
         loaded = engine._load_entry("mem.test.myfunc_L42")
         assert loaded is not None
         assert loaded.id == "mem.test.myfunc_L42"
+
+    def test_entry_filename_sanitizes_path_like_ids(self):
+        from kb_agent.query.engine import entry_filename
+
+        assert entry_filename("mod.kb_agent/analyzer") == "mod_kb_agent_analyzer.json"
 
     def test_load_entry_not_found(self, tmp_path: Path):
         from kb_agent.query.engine import QueryEngine

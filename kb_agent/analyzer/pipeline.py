@@ -13,6 +13,7 @@ from kb_agent.analyzer.mem_layer import MemberAnalyzer
 from kb_agent.analyzer.mod_layer import ModuleAnalyzer
 from kb_agent.parser.base import ParseResult
 from kb_agent.parser.factory import get_parser
+from kb_agent.query.engine import entry_filename
 from kb_agent.scanner.scanner import FileScanner
 from kb_agent.views.arch_view import ArchViewBuilder
 from kb_agent.views.base import ViewIDMapper
@@ -21,7 +22,6 @@ from kb_agent.views.mem_view import MemViewBuilder
 from kb_agent.views.mod_view import ModViewBuilder
 
 logger = logging.getLogger(__name__)
-
 
 class AnalysisPipeline:
     """Orchestrates the full 3-layer analysis pipeline."""
@@ -167,7 +167,7 @@ class AnalysisPipeline:
 
         for entry in entries:
             # Flatten ID to valid filename
-            filename = entry.id.replace(".", "_") + ".json"
+            filename = self._entry_filename(entry.id)
             file_path = entries_dir / filename
             file_path.write_text(
                 entry.model_dump_json(indent=2), encoding="utf-8"
@@ -198,6 +198,11 @@ class AnalysisPipeline:
         )
 
         return manifest
+
+    @staticmethod
+    def _entry_filename(entry_id: str) -> str:
+        """Return a filesystem-safe flat JSON filename for a KB entry ID."""
+        return entry_filename(entry_id)
 
     def _build_index(self, entries: list[KBEntry]) -> None:
         """Build FAISS vector index from entries. Skips if dependencies missing."""

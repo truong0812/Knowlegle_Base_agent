@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import numpy as np
 
 from kb_agent.models.entry import KBEntry
+
+_FILENAME_SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 class QueryEngine:
@@ -60,9 +63,15 @@ class QueryEngine:
         return entries
 
     def _load_entry(self, entry_id: str) -> KBEntry | None:
-        filename = entry_id.replace(".", "_") + ".json"
+        filename = entry_filename(entry_id)
         path = self._kb_dir / "entries" / filename
         if not path.exists():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
         return KBEntry(**data)
+
+
+def entry_filename(entry_id: str) -> str:
+    """Return the flat filename used for persisted KB entries."""
+    stem = _FILENAME_SAFE_RE.sub("_", entry_id.replace(".", "_")).strip("_")
+    return f"{stem or 'entry'}.json"
