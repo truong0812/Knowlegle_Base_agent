@@ -1,0 +1,13 @@
+{
+  "project_name": "Knowlegle_Base_agent",
+  "repo_id": "c085b2b399e8414d",
+  "last_snapshot": "2026-05-14",
+  "branch": "main",
+  "commit_sha": "e0eff8bb5673",
+  "stats": {
+    "files": 276,
+    "symbols": 430,
+    "relations": 1414,
+    "summaries": 706
+  }
+}
