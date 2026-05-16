@@ -7,7 +7,7 @@ Updated: 2026-05-16
 The MVP is complete and currently passes the full test suite:
 
 ```text
-133 passed
+136 passed
 ```
 
 The recommended operational path is graph-aware analysis:
@@ -33,8 +33,9 @@ python -m scripts.cli query "How does retrieval work?" --kb .kb --with-graph
 | Query engine | Done | Flat semantic query over KB entries |
 | Graph retrieval | Done | Semantic seeds, bounded graph expansion, context composition |
 | CLI | Done | `scan`, `parse`, `analyze`, `validate`, `index`, `query` |
-| Tests | Done | 133 tests passing |
+| Tests | Done | 136 tests passing |
 | Retrieval benchmarks | Started | Deterministic gold queries for Phase 2 retrieval precision |
+| Phase 2 symbol resolution | Started | Python import aliases resolve to `aliased_import` call edges |
 
 ## Latest Graph Snapshot
 
@@ -82,7 +83,7 @@ Phase 2 should improve retrieval precision without adding unnecessary product su
 Recommended order:
 
 1. Enhanced symbol resolution.
-   - Improve alias resolution.
+   - Improve alias resolution. Initial Python import alias support is implemented.
    - Improve cross-file call target matching.
    - Add targeted tests for ambiguous calls and overload-like cases.
 

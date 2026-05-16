@@ -15,7 +15,7 @@ RESOLUTION_CONFIDENCE: dict[str, float] = {
     "direct_import": 0.75,
     "constructor": 0.75,
     "static_call": 0.80,
-    "aliased_import": 0.45,
+    "aliased_import": 0.70,
     "dynamic_dispatch": 0.35,
     "unresolved": 0.00,
 }
@@ -35,6 +35,7 @@ class GraphBuilder:
         self._name_to_ids: dict[str, list[str]] = {}
         self._file_to_ids: dict[str, list[str]] = {}
         self._import_map: dict[str, dict[str, str]] = {}
+        self._import_aliases: dict[str, dict[str, str]] = {}
         self._seen_ids: set[str] = set()
         # Optimization indexes (built after nodes phase)
         self._file_symbol_map: dict[str, dict[str, str]] = {}
@@ -98,6 +99,7 @@ class GraphBuilder:
         """Map each file's imported names to their source files."""
         for fp, result in parse_results.items():
             self._import_map[fp] = {}
+            self._import_aliases[fp] = {}
             for imp in result.imports:
                 for name in imp.imported_names:
                     source_file = self._resolve_import_to_file(
@@ -105,6 +107,14 @@ class GraphBuilder:
                     )
                     if source_file:
                         self._import_map[fp][name] = source_file
+                        self._import_aliases[fp][name] = name
+                for local_name, imported_name in imp.aliases.items():
+                    source_file = self._resolve_import_to_file(
+                        imp.module_path, imported_name, parse_results,
+                    )
+                    if source_file:
+                        self._import_map[fp][local_name] = source_file
+                        self._import_aliases[fp][local_name] = imported_name
 
     def _resolve_import_to_file(
         self,
@@ -274,6 +284,9 @@ class GraphBuilder:
             return call.resolution_method
         import_map = self._import_map.get(fp, {})
         if call.callee_name in import_map:
+            original_name = self._import_aliases.get(fp, {}).get(call.callee_name)
+            if original_name and original_name != call.callee_name:
+                return "aliased_import"
             return "direct_import"
         return "unresolved"
 
@@ -309,10 +322,11 @@ class GraphBuilder:
                 if rnode and rnode.kind == SymbolKind.CLASS:
                     return self._class_children.get(rid, {}).get(callee)
 
-        elif resolution == "direct_import":
+        elif resolution in ("direct_import", "aliased_import"):
             source_file = self._import_map.get(fp, {}).get(callee)
             if source_file:
-                return self._file_symbol_map.get(source_file, {}).get(callee)
+                imported_name = self._import_aliases.get(fp, {}).get(callee, callee)
+                return self._file_symbol_map.get(source_file, {}).get(imported_name)
 
         return None
 

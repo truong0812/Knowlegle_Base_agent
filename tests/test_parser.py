@@ -46,6 +46,26 @@ class TestPythonParser:
         assert "os" in mod_paths
         assert "typing" in mod_paths
 
+    def test_parse_extracts_import_aliases(self):
+        parser = get_parser(Language.PYTHON)
+        source = b"from src.utils import helper as h\n\n\ndef run():\n    h()\n"
+
+        result = parser.parse_file(source, "src/main.py")
+
+        assert result.imports[0].module_path == "src.utils"
+        assert result.imports[0].imported_names == ["helper"]
+        assert result.imports[0].aliases == {"h": "helper"}
+
+    def test_parse_does_not_treat_dotted_import_as_symbol_alias(self):
+        parser = get_parser(Language.PYTHON)
+        source = b"import os.path\n\n\ndef run():\n    return os.path.join('a', 'b')\n"
+
+        result = parser.parse_file(source, "src/main.py")
+
+        assert result.imports[0].module_path == "os.path"
+        assert result.imports[0].imported_names == ["os"]
+        assert result.imports[0].aliases == {}
+
     def test_parse_extracts_return_type(self, sample_python_source: bytes):
         parser = get_parser(Language.PYTHON)
         result = parser.parse_file(sample_python_source, "user_service.py")

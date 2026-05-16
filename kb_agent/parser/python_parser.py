@@ -186,8 +186,48 @@ class PythonParser(BaseParser):
         return None
 
     def extract_imports(self, root_node: Node) -> list[ImportInfo]:
+        ast_imports = self._extract_imports_with_ast(self._node_text(root_node))
+        if ast_imports:
+            return ast_imports
+
         imports: list[ImportInfo] = []
         self._walk_for_imports(root_node, imports)
+        return imports
+
+    def _extract_imports_with_ast(self, source: str) -> list[ImportInfo]:
+        """Extract Python imports with alias information using the stdlib AST."""
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            return []
+        return self._imports_from_ast(tree)
+
+    def _imports_from_ast(self, tree: ast.AST) -> list[ImportInfo]:
+        """Convert AST import nodes into ImportInfo records."""
+        imports: list[ImportInfo] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imported_name = alias.name.split(".")[0]
+                    aliases = (
+                        {alias.asname: imported_name}
+                        if alias.asname else {}
+                    )
+                    imports.append(ImportInfo(
+                        module_path=alias.name,
+                        imported_names=[imported_name],
+                        aliases=aliases,
+                    ))
+            elif isinstance(node, ast.ImportFrom):
+                imports.append(ImportInfo(
+                    module_path=node.module or "",
+                    imported_names=[alias.name for alias in node.names],
+                    aliases={
+                        alias.asname: alias.name
+                        for alias in node.names
+                        if alias.asname
+                    },
+                ))
         return imports
 
     def _walk_for_imports(self, node: Node, out: list[ImportInfo]) -> None:
@@ -218,7 +258,7 @@ class PythonParser(BaseParser):
     def _fallback_ast_parse(self, source: bytes, file_path: str) -> ParseResult:
         tree = ast.parse(source.decode("utf-8"))
         symbols: list[SymbolInfo] = []
-        imports: list[ImportInfo] = []
+        imports = self._imports_from_ast(tree)
 
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
@@ -244,17 +284,6 @@ class PythonParser(BaseParser):
                 # Only top-level functions (not inside class — handled above)
                 if not isinstance(getattr(node, "_parent", None), ast.ClassDef):
                     symbols.append(self._ast_func_to_symbol(node))
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    imports.append(ImportInfo(module_path=alias.name))
-            elif isinstance(node, ast.ImportFrom):
-                imports.append(
-                    ImportInfo(
-                        module_path=node.module or "",
-                        imported_names=[a.name for a in node.names],
-                    )
-                )
-
         return ParseResult(
             file_path=file_path, language=Language.PYTHON, symbols=symbols, imports=imports
         )

@@ -10,7 +10,7 @@ Knowledge Base Agent is in a working MVP state. The codebase now supports both t
 
 ```text
 pytest -q
-133 passed
+136 passed
 ```
 
 Git working tree was clean before this documentation/snapshot update.
@@ -75,6 +75,14 @@ Current gold query coverage:
 
 The benchmark mocks semantic seed search and verifies graph-aware retrieval behavior after seeds are selected: intent classification, entry-to-node mapping, graph expansion, context composition, and relationship output.
 
+## Phase 2 Progress
+
+Phase 2 has started with enhanced symbol resolution:
+
+- Python import alias metadata is captured in `ImportInfo.aliases`.
+- GraphBuilder resolves aliased calls such as `from src.utils import helper as h; h()` into `aliased_import` call edges.
+- `aliased_import` is now treated as a resolved heuristic edge with confidence `0.70`.
+
 ## Next Best Action
 
-Use the retrieval benchmark baseline to guide Phase 2 improvements: enhanced symbol resolution, confidence propagation, deterministic feature overlay, and query planner refinements.
+Continue enhanced symbol resolution with cross-file call target matching and ambiguous alias/import cases, measured against targeted graph-builder tests and retrieval benchmarks.
