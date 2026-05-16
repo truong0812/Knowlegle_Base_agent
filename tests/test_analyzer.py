@@ -69,6 +69,15 @@ class TestPipelineStaticOnly:
         assert len(mod_files) >= 1
         assert len(mem_files) >= 1
 
+    def test_entry_filename_sanitizes_path_like_ids(self):
+        from kb_agent.query.engine import entry_filename
+
+        filename = AnalysisPipeline._entry_filename("mod.kb_agent/analyzer")
+
+        assert filename == entry_filename("mod.kb_agent/analyzer")
+        assert "/" not in filename
+        assert "\\" not in filename
+
     def test_empty_repo(self, tmp_path: Path):
         empty = tmp_path / "empty_repo"
         empty.mkdir()
