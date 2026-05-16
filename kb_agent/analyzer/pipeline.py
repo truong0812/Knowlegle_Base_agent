@@ -23,6 +23,7 @@ from kb_agent.views.mod_view import ModViewBuilder
 
 logger = logging.getLogger(__name__)
 
+
 class AnalysisPipeline:
     """Orchestrates the full 3-layer analysis pipeline."""
 
@@ -206,9 +207,6 @@ class AnalysisPipeline:
 
     def _build_index(self, entries: list[KBEntry]) -> None:
         """Build FAISS vector index from entries. Skips if dependencies missing."""
-        import logging
-        logger = logging.getLogger(__name__)
-
         try:
             from kb_agent.indexer.indexer import KBIndexer
             indexer = KBIndexer()
