@@ -5,6 +5,19 @@ from dataclasses import dataclass, field
 
 from kb_agent.models.entry import Language, Parameter, SymbolKind
 
+_DECORATOR_ALIASES: dict[str, str] = {
+    "inject": "injected",
+    "injected": "injected",
+    "Inject": "injected",
+    "provider": "injected",
+}
+
+
+def normalize_decorator(name: str) -> str:
+    """Normalize a decorator name to the canonical modifier stored on symbols."""
+    last = name.split(".")[-1].strip()
+    return _DECORATOR_ALIASES.get(last, last)
+
 
 @dataclass
 class SymbolInfo:
@@ -40,6 +53,7 @@ class CallInfo:
     resolution_method: str  # "same_scope", "same_file", "direct_import", "constructor", "static_call", "dynamic_dispatch", "unresolved"
     is_self_call: bool = False
     receiver: str | None = None
+    enclosing_class: str | None = None
 
 
 @dataclass
@@ -53,6 +67,15 @@ class TypeUsageInfo:
 
 
 @dataclass
+class AssignmentInfo:
+    """A variable assignment where RHS is a function call."""
+
+    variable_name: str
+    callee_name: str
+    line: int
+
+
+@dataclass
 class ParseResult:
     """Output of parsing a single source file."""
 
@@ -62,6 +85,7 @@ class ParseResult:
     imports: list[ImportInfo] = field(default_factory=list)
     calls: list[CallInfo] = field(default_factory=list)
     type_usages: list[TypeUsageInfo] = field(default_factory=list)
+    assignments: list[AssignmentInfo] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
 

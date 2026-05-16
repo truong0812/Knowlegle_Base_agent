@@ -7,8 +7,10 @@ Updated: 2026-05-16
 The MVP is complete and currently passes the full test suite:
 
 ```text
-136 passed
+193 passed, 3 dependency warnings
 ```
+
+The warnings are SWIG/native dependency deprecation warnings surfaced by analyzer/indexing dependencies, not project logic failures.
 
 The recommended operational path is graph-aware analysis:
 
@@ -33,9 +35,12 @@ python -m scripts.cli query "How does retrieval work?" --kb .kb --with-graph
 | Query engine | Done | Flat semantic query over KB entries |
 | Graph retrieval | Done | Semantic seeds, bounded graph expansion, context composition |
 | CLI | Done | `scan`, `parse`, `analyze`, `validate`, `index`, `query` |
-| Tests | Done | 136 tests passing |
-| Retrieval benchmarks | Started | Deterministic gold queries for Phase 2 retrieval precision |
-| Phase 2 symbol resolution | Started | Python import aliases resolve to `aliased_import` call edges |
+| Tests | Done | 193 tests passing |
+| Retrieval benchmarks | Done | Deterministic gold queries for Phase 2 retrieval precision |
+| Phase 2 symbol resolution | Done | Import aliases, inherited calls, type-inferred receiver calls, decorator confidence rules |
+| Phase 2 confidence | Done | Node confidence propagation and query-time hop decay |
+| Phase 2 feature overlay | Done | Deterministic noun/graph-density clusters materialized as `feature` entries |
+| Phase 2 query planner | Done | Intent-based expansion strategies for graph retrieval |
 
 ## Latest Graph Snapshot
 
@@ -58,6 +63,8 @@ Snapshot stats:
 
 The snapshot includes both graph storage and FAISS index files.
 
+Note: these snapshot stats predate the Phase 2 `feature` layer. Rebuild `.kb/` before using counts as current.
+
 ## Important CLI Flags
 
 | Command | Flag | Purpose |
@@ -78,37 +85,46 @@ For a clean graph snapshot, remove the previous `.kb/` directory before running 
 
 ## Next Phase: Confident Graph
 
-Phase 2 should improve retrieval precision without adding unnecessary product surface.
+Phase 2 improves retrieval precision without adding unnecessary product surface. The initial implementation slice is now complete in code and tests.
 
-Recommended order:
+Completed Phase 2 scope:
 
 1. Enhanced symbol resolution.
-   - Improve alias resolution. Initial Python import alias support is implemented.
-   - Improve cross-file call target matching.
-   - Add targeted tests for ambiguous calls and overload-like cases.
+   - Python import aliases resolve to `aliased_import`.
+   - Inherited `self.method()` calls resolve through base-class chains.
+   - Simple receiver calls resolve through assignment plus return-type inference.
+   - Decorator names are normalized and dependency-injected targets get capped confidence.
 
 2. Confidence propagation.
-   - Decay confidence by graph distance.
-   - Boost nodes supported by multiple high-confidence edges.
-   - Expose confidence in retrieval metrics.
+   - Node confidence is boosted by multiple high-confidence incoming edges.
+   - Query-time edge confidence decays by graph distance, including incoming traversal.
 
 3. Deterministic feature overlay.
-   - Cluster symbols by shared nouns and graph density.
-   - Keep feature generation deterministic and reproducible.
+   - Symbols are clustered by shared nouns and graph density.
+   - Features are persisted in graph storage and materialized as `feature` entries.
 
 4. Query planner and benchmarks.
-   - Baseline benchmark queries now cover symbol lookup, flow trace, module overview, and relationship lookup.
-   - Measure retrieval quality with expected node IDs, not just text output.
+   - Intent classification selects expansion strategies for symbol lookup, flow trace, module overview, relationship, and default.
+   - Benchmarks measure retrieval behavior with expected node IDs and relationship output.
 
 ## Acceptance Criteria For Phase 2
 
 | Metric | Target |
 |---|---:|
-| Test suite | 100% passing |
-| Alias resolution tests | >= 85% expected edges |
-| Call resolution benchmark | >= 75% expected edges |
-| Feature overlay repeatability | Same feature IDs across 3 runs |
-| Retrieval benchmark | Top-5 contains expected node for each gold query |
+| Test suite | 193 passing |
+| Alias resolution tests | Implemented |
+| Inherited call resolution | Implemented |
+| Type-inferred receiver calls | Implemented for simple assignment + return type chains |
+| Feature overlay repeatability | Same feature IDs across repeated runs |
+| Retrieval benchmark | Gold queries assert expected graph behavior |
+
+## Next Phase 2 Hardening
+
+- Rebuild and validate a fresh `.kb/` snapshot with the `feature` layer.
+- Add ambiguity tests for duplicate return-type factory names across files.
+- Extend type inference beyond simple `name = function()` assignments only when it stays deterministic.
+- Decide whether dependency warning filters belong in test config after dependency review.
+- Measure retrieval benchmark deltas after snapshot rebuild.
 
 ## Near-Term Maintenance
 

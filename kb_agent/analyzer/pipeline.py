@@ -104,7 +104,19 @@ class AnalysisPipeline:
             nodes=nodes, edges=edges, mod_entries=mod, file_entries=file,
         )
 
-        return self._link_entries(arch, mod, file, mem)
+        # Feature overlay (deterministic, no LLM)
+        from kb_agent.graph.features import FeatureExtractor
+        from kb_agent.views.feature_view import FeatureViewBuilder
+
+        extractor = FeatureExtractor(nodes, edges)
+        features = extractor.extract_features()
+        if features:
+            storage.save_features(features)
+        feature_entries = await FeatureViewBuilder(mapper, self._llm).build(
+            features=features, nodes=nodes,
+        )
+
+        return self._link_entries(arch, mod, file, mem, feature_entries)
 
     def _build_and_save_graph(self, parse_results: dict[str, ParseResult]) -> None:
         """Build symbol graph from parse results and save to disk."""
@@ -142,14 +154,11 @@ class AnalysisPipeline:
         mod: list[KBEntry],
         file: list[KBEntry],
         mem: list[KBEntry] | None = None,
+        features: list[KBEntry] | None = None,
     ) -> list[KBEntry]:
-        """Set children fields on parent entries.
-
-        When mem is None, only arch+mod+file are linked (legacy path).
-        When mem is provided, all four layers are linked (graph path).
-        """
+        """Set children fields on parent entries."""
         entry_map: dict[str, KBEntry] = {}
-        all_entries = arch + mod + file + (mem if mem else [])
+        all_entries = arch + mod + file + (mem if mem else []) + (features if features else [])
         for entry in all_entries:
             entry_map[entry.id] = entry
 
@@ -175,7 +184,13 @@ class AnalysisPipeline:
             )
 
         # Build manifest
-        by_layer: dict[str, int] = {"arch": 0, "mod": 0, "file": 0, "mem": 0}
+        by_layer: dict[str, int] = {
+            "arch": 0,
+            "mod": 0,
+            "file": 0,
+            "mem": 0,
+            "feature": 0,
+        }
         for entry in entries:
             by_layer[entry.layer.value] = by_layer.get(entry.layer.value, 0) + 1
 

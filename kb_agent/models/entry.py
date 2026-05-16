@@ -10,6 +10,7 @@ class Layer(str, Enum):
     MOD = "mod"
     FILE = "file"
     MEM = "mem"
+    FEATURE = "feature"
 
 
 class SymbolKind(str, Enum):

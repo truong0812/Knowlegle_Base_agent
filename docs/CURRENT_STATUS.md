@@ -4,16 +4,18 @@ Updated: 2026-05-16
 
 ## Summary
 
-Knowledge Base Agent is in a working MVP state. The codebase now supports both the original layered KB pipeline and the newer graph-aware pipeline. The graph-aware path is the preferred path for new snapshots because it produces a symbol graph and materialized retrieval views.
+Knowledge Base Agent is in a working graph-aware MVP state with the first Phase 2 "Confident Graph" slice implemented. The codebase supports both the original layered KB pipeline and the newer graph-aware pipeline. The graph-aware path is the preferred path for new snapshots because it produces a symbol graph, materialized retrieval views, feature overlays, and graph-aware retrieval context.
 
 ## Verified Health
 
 ```text
 pytest -q
-136 passed
+193 passed, 3 dependency warnings
 ```
 
-Git working tree was clean before this documentation/snapshot update.
+The warnings are SWIG/native dependency deprecation warnings surfaced during analyzer tests; they are not Phase 2 logic failures.
+
+The working tree currently contains uncommitted Phase 2 implementation updates.
 
 ## Recommended Snapshot Command
 
@@ -28,14 +30,16 @@ Expected graph-mode layers:
 - `mod`
 - `file`
 - `mem`
+- `feature`
 
 Expected graph files:
 
 - `.kb/graph/nodes.jsonl`
 - `.kb/graph/edges.jsonl`
 - `.kb/graph/adjacency.json`
+- `.kb/graph/features.jsonl` when deterministic feature clusters are found
 
-Latest rebuilt snapshot:
+Latest documented rebuilt snapshot:
 
 - Total entries: 521
 - Layers: `arch: 1`, `mod: 24`, `file: 50`, `mem: 446`
@@ -43,14 +47,16 @@ Latest rebuilt snapshot:
 - Validation: 100% consistency, no orphan entries
 - Graph-aware query smoke test: `RetrievalEngine` returns primary results, related nodes, 2-hop context, and relationship edges
 
+Note: the stats above predate the Phase 2 feature layer changes. Rebuild `.kb/` before treating snapshot counts as current.
+
 ## Canonical Runtime Model
 
 ```text
 Parser output
   -> Symbol graph
-  -> Materialized KB views
+  -> Materialized KB views + deterministic feature overlay
   -> FAISS index
-  -> Graph-aware retrieval
+  -> Intent-planned graph-aware retrieval
 ```
 
 The symbol graph is the source of truth. KB entries are cached views designed for agent retrieval.
@@ -64,7 +70,7 @@ The symbol graph is the source of truth. KB entries are cached views designed fo
 
 ## Retrieval Benchmark Baseline
 
-Phase 2 now has a deterministic retrieval benchmark baseline in `tests/test_retrieval_benchmarks.py`.
+Phase 2 has deterministic retrieval benchmark coverage in `tests/test_retrieval_benchmarks.py`.
 
 Current gold query coverage:
 
@@ -77,12 +83,20 @@ The benchmark mocks semantic seed search and verifies graph-aware retrieval beha
 
 ## Phase 2 Progress
 
-Phase 2 has started with enhanced symbol resolution:
+Phase 2 implementation now includes:
 
 - Python import alias metadata is captured in `ImportInfo.aliases`.
 - GraphBuilder resolves aliased calls such as `from src.utils import helper as h; h()` into `aliased_import` call edges.
 - `aliased_import` is now treated as a resolved heuristic edge with confidence `0.70`.
+- Parser-level assignment extraction captures simple receiver assignments such as `svc = get_service()`.
+- GraphBuilder resolves type-inferred receiver calls such as `svc.login()` when the assigned factory function has a return type that maps to a known class.
+- Inherited `self.method()` calls resolve through base-class chains with `inherited_scope` confidence.
+- Decorators are normalized, including `@inject` and qualified forms such as `@container.inject()`, so dependency-injected targets get confidence capped.
+- Node confidence is propagated from high-confidence incoming edges.
+- Query-time edge confidence decays by graph hop using the farthest endpoint, including incoming relationship traversal.
+- Deterministic feature clusters are extracted from shared nouns and graph density, persisted to `features.jsonl`, and materialized as `feature` KB entries.
+- QueryPlanner selects expansion strategy by intent: symbol lookup, flow trace, module overview, relationship, and default.
 
 ## Next Best Action
 
-Continue enhanced symbol resolution with cross-file call target matching and ambiguous alias/import cases, measured against targeted graph-builder tests and retrieval benchmarks.
+Rebuild a clean `.kb/` graph snapshot, validate it, and update snapshot stats after the Phase 2 feature layer is materialized.

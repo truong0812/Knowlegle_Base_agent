@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from kb_agent.graph.features import Feature
 from kb_agent.models.graph import SymbolEdge, SymbolNode
 
 
@@ -41,6 +42,33 @@ class GraphStorage:
         nodes = self._load_jsonl(self._dir / "nodes.jsonl", SymbolNode)
         edges = self._load_jsonl(self._dir / "edges.jsonl", SymbolEdge)
         return nodes, edges
+
+    def save_features(self, features: list[Feature]) -> None:
+        """Write features.jsonl."""
+        self._dir.mkdir(parents=True, exist_ok=True)
+        path = self._dir / "features.jsonl"
+        with open(path, "w", encoding="utf-8") as f:
+            for feat in features:
+                data = {
+                    "id": feat.id,
+                    "name": feat.name,
+                    "member_node_ids": feat.member_node_ids,
+                    "naming_basis": feat.naming_basis,
+                    "edge_density": feat.edge_density,
+                }
+                f.write(json.dumps(data) + "\n")
+
+    def load_features(self) -> list[Feature]:
+        """Load features from disk."""
+        path = self._dir / "features.jsonl"
+        if not path.exists():
+            return []
+        features: list[Feature] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                data = json.loads(line)
+                features.append(Feature(**data))
+        return features
 
     def _build_adjacency(
         self,

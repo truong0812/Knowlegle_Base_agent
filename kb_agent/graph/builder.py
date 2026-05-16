@@ -5,7 +5,7 @@ from pathlib import Path
 
 from kb_agent.models.entry import Language, SymbolKind
 from kb_agent.models.graph import EdgeKind, SymbolEdge, SymbolNode
-from kb_agent.parser.base import ParseResult, SymbolInfo
+from kb_agent.parser.base import AssignmentInfo, ParseResult, SymbolInfo
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +16,8 @@ RESOLUTION_CONFIDENCE: dict[str, float] = {
     "constructor": 0.75,
     "static_call": 0.80,
     "aliased_import": 0.70,
+    "inherited_scope": 0.80,
+    "type_inferred": 0.65,
     "dynamic_dispatch": 0.35,
     "unresolved": 0.00,
 }
@@ -58,9 +60,12 @@ class GraphBuilder:
 
         self._create_contains_edges(parse_results)
         self._create_imports_edges(parse_results)
+        self._create_inheritance_edges(parse_results)
         self._resolve_calls_edges(parse_results)
         self._create_type_usage_edges(parse_results)
-        self._create_inheritance_edges(parse_results)
+
+        self._enhanced_resolve(parse_results)
+        self._propagate_confidences()
 
     @property
     def nodes(self) -> list[SymbolNode]:
@@ -92,6 +97,34 @@ class GraphBuilder:
         """Update indexes when a CONTAINS edge is created."""
         self._child_to_parent[child_id] = parent_id
         self._class_children.setdefault(parent_id, {})[child_name] = child_id
+
+    # ── Phase 8: Enhanced Resolution ─────────────────────────────
+
+    def _enhanced_resolve(self, parse_results: dict[str, ParseResult]) -> None:
+        """Post-build enhanced symbol resolution."""
+        from kb_agent.graph.resolver import EnhancedResolver
+
+        resolver = EnhancedResolver(
+            nodes=self._nodes,
+            edges=self._edges,
+            node_index=self._node_index,
+            name_to_ids=self._name_to_ids,
+            class_children=self._class_children,
+            child_to_parent=self._child_to_parent,
+        )
+        new_edges = resolver.resolve_all()
+        self._edges.extend(new_edges)
+
+    def _propagate_confidences(self) -> None:
+        """Compute and store node confidence from edge density."""
+        from kb_agent.graph.confidence import ConfidencePropagator
+
+        propagator = ConfidencePropagator(self._nodes, self._edges)
+        node_confs = propagator.compute_node_confidences()
+        for nid, nc in node_confs.items():
+            node = self._node_index.get(nid)
+            if node:
+                node.confidence = nc.propagated_confidence
 
     # ── Phase 1: Import Map ──────────────────────────────────────
 
@@ -252,6 +285,11 @@ class GraphBuilder:
 
     def _resolve_calls_edges(self, parse_results: dict[str, ParseResult]) -> None:
         """Resolve and create CALLS edges with graduated confidence."""
+        # Build assignment map for type inference.
+        assignment_map: dict[str, list[AssignmentInfo]] = {}
+        for fp, result in parse_results.items():
+            assignment_map[fp] = result.assignments
+
         for fp, result in parse_results.items():
             for call in result.calls:
                 caller_id = self._find_enclosing_node(fp, call.line)
@@ -260,7 +298,21 @@ class GraphBuilder:
 
                 effective_resolution = self._upgrade_resolution(fp, call)
                 confidence = RESOLUTION_CONFIDENCE.get(effective_resolution, 0.0)
+
+                # If below threshold, try type inference before dropping
                 if confidence < CONFIDENCE_THRESHOLD:
+                    target_id = self._try_type_inference(
+                        caller_id, call, fp, assignment_map,
+                    )
+                    if target_id:
+                        self._edges.append(SymbolEdge(
+                            source=caller_id,
+                            target=target_id,
+                            kind=EdgeKind.CALLS,
+                            confidence=RESOLUTION_CONFIDENCE["type_inferred"],
+                            source_type="heuristic",
+                            resolution="type_inferred",
+                        ))
                     continue
 
                 target_id = self._find_callee_target(
@@ -268,6 +320,13 @@ class GraphBuilder:
                 )
                 if not target_id:
                     continue
+
+                # Check if same_scope was resolved via inheritance chain
+                if effective_resolution == "same_scope":
+                    parent_class = self._child_to_parent.get(caller_id)
+                    if parent_class and target_id not in self._class_children.get(parent_class, {}).values():
+                        effective_resolution = "inherited_scope"
+                        confidence = RESOLUTION_CONFIDENCE["inherited_scope"]
 
                 self._edges.append(SymbolEdge(
                     source=caller_id,
@@ -303,7 +362,11 @@ class GraphBuilder:
         if resolution == "same_scope":
             parent_class = self._find_parent_class(caller_id)
             if parent_class:
-                return self._class_children.get(parent_class, {}).get(callee)
+                target = self._class_children.get(parent_class, {}).get(callee)
+                if target:
+                    return target
+                # Fallback: walk inheritance chain
+                return self._resolve_inherited_method(parent_class, callee)
 
         elif resolution == "same_file":
             return self._file_symbol_map.get(fp, {}).get(callee)
@@ -377,6 +440,62 @@ class GraphBuilder:
 
     # ── Helpers ──────────────────────────────────────────────────
 
+    def _try_type_inference(
+        self,
+        caller_id: str,
+        call,
+        file_path: str,
+        assignment_map: dict[str, list[AssignmentInfo]],
+    ) -> str | None:
+        """Try to resolve a dynamic_dispatch call via type inference.
+
+        Flow: receiver → assignment_map → callee_name → return_type → class → method
+        """
+        receiver = getattr(call, "receiver", None)
+        if not receiver:
+            return None
+        callee_name = call.callee_name
+
+        # Look up the nearest previous assignment in the same enclosing node:
+        # svc = get_service(); svc.login()
+        candidates = [
+            asgn for asgn in assignment_map.get(file_path, [])
+            if asgn.variable_name == receiver
+            and asgn.line <= call.line
+            and self._find_enclosing_node(file_path, asgn.line) == caller_id
+        ]
+        if not candidates:
+            return None
+        assigned_callee = max(candidates, key=lambda asgn: asgn.line).callee_name
+
+        # Find that function's return type
+        ret_type: str | None = None
+        for nid in self._name_to_ids.get(assigned_callee, []):
+            node = self._node_index.get(nid)
+            if node and node.return_type:
+                ret_type = node.return_type
+                break
+        if not ret_type:
+            return None
+
+        # Resolve return type to a class node
+        class_id = self._resolve_type_to_class_id(ret_type)
+        if not class_id:
+            return None
+
+        # Find the method on that class
+        return self._class_children.get(class_id, {}).get(callee_name)
+
+    def _resolve_type_to_class_id(self, type_name: str) -> str | None:
+        """Resolve a type name string to a class node ID."""
+        clean = type_name.strip("[]").split("[")[-1].strip("]").strip()
+        clean = clean.split(".")[-1]
+        for nid in self._name_to_ids.get(clean, []):
+            node = self._node_index.get(nid)
+            if node and node.kind == SymbolKind.CLASS:
+                return nid
+        return None
+
     def _find_node_id(
         self,
         file_path: str,
@@ -434,3 +553,22 @@ class GraphBuilder:
     def _find_parent_class(self, node_id: str) -> str | None:
         """Find the parent class node for a given method node. O(1) via index."""
         return self._child_to_parent.get(node_id)
+
+    def _resolve_inherited_method(self, class_id: str, method_name: str) -> str | None:
+        """Walk inheritance edges to find a method in ancestor classes."""
+        visited: set[str] = set()
+        queue = [class_id]
+        while queue:
+            current = queue.pop(0)
+            if current in visited:
+                continue
+            visited.add(current)
+            method_id = self._class_children.get(current, {}).get(method_name)
+            if method_id:
+                return method_id
+            # Follow INHERITS edges to ancestors
+            for edge in self._edges:
+                if edge.kind == EdgeKind.INHERITS and edge.source == current:
+                    if edge.target not in visited:
+                        queue.append(edge.target)
+        return None

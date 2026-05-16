@@ -9,6 +9,7 @@ from kb_agent.query.composer import RetrievalMetrics, RetrievalResult, compose_c
 from kb_agent.query.expander import expand_from_seeds
 from kb_agent.query.intent import QueryIntent, classify_intent
 from kb_agent.query.mapper import build_entry_to_node_mapper
+from kb_agent.query.planner import QueryPlanner
 from kb_agent.query.engine import QueryEngine
 from kb_agent.views.base import ViewIDMapper
 
@@ -59,7 +60,9 @@ class RetrievalEngine:
             return self._entry_only_result(question, intent, seed_entries)
 
         mapper = self._get_mapper(graph_dir)
-        subgraph = expand_from_seeds(mapping.seed_nodes, mapper)
+        planner = QueryPlanner()
+        strategy = planner.plan(intent)
+        subgraph = expand_from_seeds(mapping.seed_nodes, mapper, strategy=strategy)
         result = compose_context(
             subgraph=subgraph,
             seed_entries=seed_entries,

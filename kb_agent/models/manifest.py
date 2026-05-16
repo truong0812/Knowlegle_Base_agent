@@ -8,7 +8,13 @@ from pydantic import BaseModel, Field
 class KBStats(BaseModel):
     total_entries: int = 0
     by_layer: dict[str, int] = Field(
-        default_factory=lambda: {"arch": 0, "mod": 0, "file": 0, "mem": 0}
+        default_factory=lambda: {
+            "arch": 0,
+            "mod": 0,
+            "file": 0,
+            "mem": 0,
+            "feature": 0,
+        }
     )
     coverage: float = 0.0
     avg_confidence: float = 0.0
