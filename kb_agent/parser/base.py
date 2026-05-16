@@ -27,6 +27,7 @@ class SymbolInfo:
 class ImportInfo:
     module_path: str
     imported_names: list[str] = field(default_factory=list)
+    aliases: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

@@ -224,6 +224,33 @@ class TestCallsEdges:
         assert calls[0].resolution == "direct_import"
         assert calls[0].confidence == 0.75
 
+    def test_unresolved_upgraded_to_aliased_import(self):
+        func_a = _make_symbol("process", kind=SymbolKind.FUNCTION, line_start=1, line_end=10)
+        func_b = _make_symbol("helper", kind=SymbolKind.FUNCTION, line_start=1, line_end=5)
+        builder = GraphBuilder(repo_name="repo")
+        builder.build({
+            "src/utils.py": _make_parse_result(file_path="src/utils.py", symbols=[func_b]),
+            "src/main.py": _make_parse_result(
+                file_path="src/main.py",
+                symbols=[func_a],
+                imports=[ImportInfo(
+                    module_path="src.utils",
+                    imported_names=["helper"],
+                    aliases={"h": "helper"},
+                )],
+                calls=[CallInfo(
+                    caller_name="process", callee_name="h", line=5,
+                    resolution_method="unresolved",
+                )],
+            ),
+        })
+
+        calls = [e for e in builder.edges if e.kind == EdgeKind.CALLS]
+        assert len(calls) == 1
+        assert calls[0].resolution == "aliased_import"
+        assert calls[0].confidence == 0.70
+        assert "helper" in calls[0].target
+
 
 class TestInheritsEdge:
     def test_base_class(self):
