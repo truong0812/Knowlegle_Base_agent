@@ -46,6 +46,7 @@ class RetrievalEngine:
                 metrics=RetrievalMetrics(
                     query=question, intent=intent.value,
                     seed_nodes=[], expanded_nodes=[],
+                    relationship_edges=[],
                     token_allocation={}, truncated=False,
                     truncated_nodes=[], total_tokens_used=0,
                 ),
@@ -99,6 +100,7 @@ class RetrievalEngine:
             metrics=RetrievalMetrics(
                 query=question, intent=intent.value,
                 seed_nodes=entry_ids, expanded_nodes=entry_ids,
+                relationship_edges=[],
                 token_allocation={"entry": len(context) // 4},
                 truncated=False, truncated_nodes=[],
                 total_tokens_used=len(context) // 4,

@@ -1,6 +1,6 @@
 # Current Status
 
-Updated: 2026-05-15
+Updated: 2026-05-16
 
 ## Summary
 
@@ -10,7 +10,7 @@ Knowledge Base Agent is in a working MVP state. The codebase now supports both t
 
 ```text
 pytest -q
-129 passed
+133 passed
 ```
 
 Git working tree was clean before this documentation/snapshot update.
@@ -62,6 +62,19 @@ The symbol graph is the source of truth. KB entries are cached views designed fo
 - The KB writer does not prune stale entry files, so clean graph snapshots should remove `.kb/` before rebuild.
 - Most docs are now aligned with graph-aware MVP status, but the long roadmap remains intentionally broad and should be treated as strategy, not an exact implementation tracker.
 
+## Retrieval Benchmark Baseline
+
+Phase 2 now has a deterministic retrieval benchmark baseline in `tests/test_retrieval_benchmarks.py`.
+
+Current gold query coverage:
+
+- `symbol_lookup`: `What does RetrievalEngine do?`
+- `flow_trace`: `How does graph retrieval work?`
+- `module_overview`: `overview of query module`
+- `relationship`: `Who calls compose_context?`
+
+The benchmark mocks semantic seed search and verifies graph-aware retrieval behavior after seeds are selected: intent classification, entry-to-node mapping, graph expansion, context composition, and relationship output.
+
 ## Next Best Action
 
-Begin Phase 2 with retrieval quality benchmarks before adding more graph features. This gives the project a measurable feedback loop for context precision.
+Use the retrieval benchmark baseline to guide Phase 2 improvements: enhanced symbol resolution, confidence propagation, deterministic feature overlay, and query planner refinements.

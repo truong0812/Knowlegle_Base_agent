@@ -19,6 +19,7 @@ class RetrievalMetrics:
     intent: str
     seed_nodes: list[str]
     expanded_nodes: list[str]
+    relationship_edges: list[tuple[str, str, str]]
     token_allocation: dict[str, int]
     truncated: bool
     truncated_nodes: list[str]
@@ -119,6 +120,10 @@ def compose_context(
             intent=intent.value,
             seed_nodes=[n.id for n in subgraph.seed_nodes],
             expanded_nodes=all_node_ids,
+            relationship_edges=[
+                (edge.source, edge.target, edge.kind.value)
+                for edge in subgraph.relevant_edges
+            ],
             token_allocation=allocation,
             truncated=len(truncated_nodes) > 0,
             truncated_nodes=truncated_nodes,

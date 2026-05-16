@@ -1,13 +1,13 @@
 # Implementation Plan
 
-Updated: 2026-05-15
+Updated: 2026-05-16
 
 ## Current Baseline
 
 The MVP is complete and currently passes the full test suite:
 
 ```text
-129 passed
+133 passed
 ```
 
 The recommended operational path is graph-aware analysis:
@@ -33,7 +33,8 @@ python -m scripts.cli query "How does retrieval work?" --kb .kb --with-graph
 | Query engine | Done | Flat semantic query over KB entries |
 | Graph retrieval | Done | Semantic seeds, bounded graph expansion, context composition |
 | CLI | Done | `scan`, `parse`, `analyze`, `validate`, `index`, `query` |
-| Tests | Done | 129 tests passing |
+| Tests | Done | 133 tests passing |
+| Retrieval benchmarks | Started | Deterministic gold queries for Phase 2 retrieval precision |
 
 ## Latest Graph Snapshot
 
@@ -95,7 +96,7 @@ Recommended order:
    - Keep feature generation deterministic and reproducible.
 
 4. Query planner and benchmarks.
-   - Add benchmark queries for symbol lookup, flow trace, module overview, and relationship lookup.
+   - Baseline benchmark queries now cover symbol lookup, flow trace, module overview, and relationship lookup.
    - Measure retrieval quality with expected node IDs, not just text output.
 
 ## Acceptance Criteria For Phase 2
