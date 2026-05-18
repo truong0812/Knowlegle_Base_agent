@@ -13,11 +13,11 @@ class QueryIntent(str, Enum):
 
 
 INTENT_BUDGET_RATIOS: dict[QueryIntent, dict[str, float]] = {
-    QueryIntent.SYMBOL_LOOKUP: {"entry": 0.60, "hop1": 0.20, "hop2": 0.10, "meta": 0.10},
-    QueryIntent.FLOW_TRACE: {"entry": 0.25, "hop1": 0.45, "hop2": 0.20, "meta": 0.10},
-    QueryIntent.MODULE_OVERVIEW: {"entry": 0.30, "hop1": 0.40, "hop2": 0.20, "meta": 0.10},
-    QueryIntent.RELATIONSHIP: {"entry": 0.30, "hop1": 0.40, "hop2": 0.20, "meta": 0.10},
-    QueryIntent.DEFAULT: {"entry": 0.40, "hop1": 0.35, "hop2": 0.15, "meta": 0.10},
+    QueryIntent.SYMBOL_LOOKUP: {"entry": 0.60, "hop1": 0.20, "hop2": 0.10, "hop3": 0.00, "meta": 0.10},
+    QueryIntent.FLOW_TRACE: {"entry": 0.25, "hop1": 0.40, "hop2": 0.20, "hop3": 0.05, "meta": 0.10},
+    QueryIntent.MODULE_OVERVIEW: {"entry": 0.30, "hop1": 0.40, "hop2": 0.20, "hop3": 0.00, "meta": 0.10},
+    QueryIntent.RELATIONSHIP: {"entry": 0.30, "hop1": 0.40, "hop2": 0.20, "hop3": 0.00, "meta": 0.10},
+    QueryIntent.DEFAULT: {"entry": 0.40, "hop1": 0.35, "hop2": 0.15, "hop3": 0.00, "meta": 0.10},
 }
 
 _INTENT_KEYWORDS: dict[QueryIntent, list[str]] = {

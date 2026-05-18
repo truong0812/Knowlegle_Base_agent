@@ -29,6 +29,7 @@ class SymbolNode(BaseModel):
     parameters: list[Parameter] = Field(default_factory=list)
     return_type: str | None = None
     docstring: str | None = None
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
 class SymbolEdge(BaseModel):

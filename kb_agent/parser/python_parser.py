@@ -7,7 +7,7 @@ import tree_sitter_python as tspython
 from tree_sitter import Language as TSLanguage, Parser, Node
 
 from kb_agent.models.entry import Language, Parameter, SymbolKind
-from kb_agent.parser.base import BaseParser, CallInfo, ImportInfo, ParseResult, SymbolInfo, TypeUsageInfo
+from kb_agent.parser.base import AssignmentInfo, BaseParser, CallInfo, ImportInfo, ParseResult, SymbolInfo, TypeUsageInfo, normalize_decorator
 
 
 class PythonParser(BaseParser):
@@ -33,6 +33,7 @@ class PythonParser(BaseParser):
         imports = self.extract_imports(tree.root_node)
         calls = self._extract_calls(tree.root_node, symbols)
         type_usages = self._extract_type_usages(tree.root_node, symbols)
+        assignments = self._extract_assignments(tree.root_node)
         return ParseResult(
             file_path=file_path,
             language=Language.PYTHON,
@@ -40,6 +41,7 @@ class PythonParser(BaseParser):
             imports=imports,
             calls=calls,
             type_usages=type_usages,
+            assignments=assignments,
             errors=errors,
         )
 
@@ -55,14 +57,15 @@ class PythonParser(BaseParser):
             elif child.type == "function_definition":
                 out.append(self._extract_function(child))
             elif child.type == "decorated_definition":
+                decorators = self._extract_decorator_names(child)
                 target = child.children[-1]
                 if target.type == "class_definition":
                     sym = self._extract_class(target)
-                    sym.modifiers.append("decorated")
+                    sym.modifiers.extend(decorators)
                     out.append(sym)
                 elif target.type == "function_definition":
                     sym = self._extract_function(target)
-                    sym.modifiers.append("decorated")
+                    sym.modifiers.extend(decorators)
                     out.append(sym)
             # Recurse into module/block only (not class bodies — methods handled by _extract_class)
             if depth < 2 and child.type in ("module", "block"):
@@ -88,10 +91,11 @@ class PythonParser(BaseParser):
                 if child.type == "function_definition":
                     children.append(self._extract_function(child))
                 elif child.type == "decorated_definition":
+                    decorators = self._extract_decorator_names(child)
                     target = child.children[-1]
                     if target.type == "function_definition":
                         fn = self._extract_function(target)
-                        fn.modifiers.append("decorated")
+                        fn.modifiers.extend(decorators)
                         children.append(fn)
 
         docstring = self._extract_docstring(body) if body else None
@@ -330,34 +334,71 @@ class PythonParser(BaseParser):
                 return child
         return None
 
+    def _extract_decorator_names(self, decorated_node: Node) -> list[str]:
+        """Extract specific decorator names from a decorated_definition node."""
+        names: list[str] = []
+        for child in decorated_node.children:
+            if child.type == "decorator":
+                text = self._node_text(child).lstrip("@")
+                name = normalize_decorator(text.split("(")[0].strip())
+                if name:
+                    names.append(name)
+        return names
+
     def _extract_calls(self, root_node: Node, symbols: list[SymbolInfo]) -> list[CallInfo]:
         """Walk AST for call nodes, resolve to CallInfo with resolution method."""
         class_names = {s.name for s in symbols if s.kind == SymbolKind.CLASS}
         local_func_names = {s.name for s in symbols if s.kind == SymbolKind.FUNCTION}
+        # Map class name to its method decorator info
+        class_method_decorators: dict[str, dict[str, list[str]]] = {}
         for cls in symbols:
             if cls.kind == SymbolKind.CLASS:
                 for m in cls.children:
                     local_func_names.add(m.name)
+                    if m.modifiers:
+                        class_method_decorators.setdefault(cls.name, {})[m.name] = m.modifiers
 
         calls: list[CallInfo] = []
-        self._walk_for_calls(root_node, calls, class_names, local_func_names)
+        self._walk_for_calls(root_node, calls, class_names, local_func_names, class_method_decorators)
         return calls
 
     def _walk_for_calls(
-        self, node: Node, out: list[CallInfo],
-        class_names: set[str], local_names: set[str],
+        self,
+        node: Node,
+        out: list[CallInfo],
+        class_names: set[str],
+        local_names: set[str],
+        class_method_decorators: dict[str, dict[str, list[str]]],
+        enclosing_class: str | None = None,
     ) -> None:
         for child in node.children:
             if child.type == "call":
-                call_info = self._resolve_call(child, class_names, local_names)
+                call_info = self._resolve_call(
+                    child, class_names, local_names, class_method_decorators, enclosing_class,
+                )
                 if call_info:
                     out.append(call_info)
+            elif child.type == "class_definition":
+                name_node = self._get_child_by_type(child, "identifier")
+                new_enclosing = self._node_text(name_node) if name_node else enclosing_class
+                self._walk_for_calls(
+                    child, out, class_names, local_names,
+                    class_method_decorators, new_enclosing,
+                )
+                continue
             if child.type not in ("import_statement", "import_from_statement"):
-                self._walk_for_calls(child, out, class_names, local_names)
+                self._walk_for_calls(
+                    child, out, class_names, local_names,
+                    class_method_decorators, enclosing_class,
+                )
 
     def _resolve_call(
-        self, call_node: Node,
-        class_names: set[str], local_names: set[str],
+        self,
+        call_node: Node,
+        class_names: set[str],
+        local_names: set[str],
+        class_method_decorators: dict[str, dict[str, list[str]]],
+        enclosing_class: str | None = None,
     ) -> CallInfo | None:
         func_node = call_node.child_by_field_name("function")
         if not func_node:
@@ -375,15 +416,25 @@ class PythonParser(BaseParser):
                 return CallInfo(
                     caller_name="", callee_name=callee, line=line,
                     resolution_method="same_scope", is_self_call=True, receiver="self",
+                    enclosing_class=enclosing_class,
                 )
             if receiver in class_names:
+                method_mods = class_method_decorators.get(receiver, {}).get(callee, [])
+                if "staticmethod" in method_mods or "classmethod" in method_mods:
+                    return CallInfo(
+                        caller_name="", callee_name=callee, line=line,
+                        resolution_method="static_call", receiver=receiver,
+                        enclosing_class=enclosing_class,
+                    )
                 return CallInfo(
                     caller_name="", callee_name=callee, line=line,
                     resolution_method="static_call", receiver=receiver,
+                    enclosing_class=enclosing_class,
                 )
             return CallInfo(
                 caller_name="", callee_name=callee, line=line,
                 resolution_method="dynamic_dispatch", receiver=receiver,
+                enclosing_class=enclosing_class,
             )
 
         if func_node.type == "identifier":
@@ -392,18 +443,47 @@ class PythonParser(BaseParser):
                 return CallInfo(
                     caller_name="", callee_name=callee, line=line,
                     resolution_method="constructor",
+                    enclosing_class=enclosing_class,
                 )
             if callee in local_names:
                 return CallInfo(
                     caller_name="", callee_name=callee, line=line,
                     resolution_method="same_file",
+                    enclosing_class=enclosing_class,
                 )
             return CallInfo(
                 caller_name="", callee_name=callee, line=line,
                 resolution_method="unresolved",
+                enclosing_class=enclosing_class,
             )
 
         return None
+
+    def _extract_assignments(self, root_node: Node) -> list[AssignmentInfo]:
+        """Extract variable assignments where RHS is a simple function call.
+
+        Captures patterns like: svc = get_service()
+        Does NOT capture: svc = obj.method(), svc = a + b, etc.
+        """
+        assignments: list[AssignmentInfo] = []
+        self._walk_for_assignments(root_node, assignments)
+        return assignments
+
+    def _walk_for_assignments(self, node: Node, out: list[AssignmentInfo]) -> None:
+        for child in node.children:
+            if child.type == "assignment":
+                lhs = child.child_by_field_name("left")
+                rhs = child.child_by_field_name("right")
+                if lhs and lhs.type == "identifier" and rhs and rhs.type == "call":
+                    func_node = rhs.child_by_field_name("function")
+                    if func_node and func_node.type == "identifier":
+                        out.append(AssignmentInfo(
+                            variable_name=self._node_text(lhs),
+                            callee_name=self._node_text(func_node),
+                            line=child.start_point[0] + 1,
+                        ))
+            if child.type not in ("import_statement", "import_from_statement"):
+                self._walk_for_assignments(child, out)
 
     def _extract_type_usages(
         self, root_node: Node, symbols: list[SymbolInfo],
