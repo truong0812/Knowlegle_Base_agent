@@ -45,7 +45,7 @@ def compose_context(
 
     entry_lookup = _build_entry_lookup(seed_entries)
     sections: list[str] = []
-    allocation: dict[str, int] = {"entry": 0, "hop1": 0, "hop2": 0, "meta": 0}
+    allocation: dict[str, int] = {"entry": 0, "hop1": 0, "hop2": 0, "hop3": 0, "meta": 0}
     truncated_nodes: list[str] = []
     total_tokens = 0
 
@@ -78,6 +78,16 @@ def compose_context(
     allocation["hop2"] = hop2_tok
     truncated_nodes.extend(hop2_trunc)
     total_tokens += hop2_tok
+
+    # 3-hop tier - minimal, used by flow-trace expansion.
+    hop3_text, hop3_tok, hop3_trunc = _format_tier(
+        subgraph.hop3_nodes, entry_lookup, budgets.get("hop3", 0), "minimal",
+    )
+    if hop3_text:
+        sections.append(f"=== CONTEXT (3-hop) ===\n{hop3_text}")
+    allocation["hop3"] = hop3_tok
+    truncated_nodes.extend(hop3_trunc)
+    total_tokens += hop3_tok
 
     # Meta tier — arch/mod/file entries
     meta_text, meta_tok = _format_meta(unmapped_entries, budgets["meta"])

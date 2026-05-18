@@ -110,8 +110,7 @@ class AnalysisPipeline:
 
         extractor = FeatureExtractor(nodes, edges)
         features = extractor.extract_features()
-        if features:
-            storage.save_features(features)
+        storage.save_features(features)
         feature_entries = await FeatureViewBuilder(mapper, self._llm).build(
             features=features, nodes=nodes,
         )

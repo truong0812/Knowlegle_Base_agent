@@ -42,6 +42,11 @@ class FeatureViewBuilder(ViewBuilder):
             if first_node is None:
                 continue
 
+            summary = (
+                f"Feature {feature.name} groups {len(member_sigs)} related symbols: "
+                f"{'; '.join(member_sigs[:8])}"
+            )
+
             entry = KBEntry(
                 id=feature.id,
                 layer=Layer.FEATURE,
@@ -58,8 +63,10 @@ class FeatureViewBuilder(ViewBuilder):
                     source="feature_overlay",
                 ),
                 ai=AIData(
+                    summary=summary,
                     tags=[feature.naming_basis],
                     confidence=1.0,
+                    source="static",
                 ),
             )
             entries.append(entry)

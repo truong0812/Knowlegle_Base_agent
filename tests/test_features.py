@@ -209,6 +209,24 @@ class TestFeatureStorage:
         assert loaded[0].member_node_ids == ["n1", "n2", "n3"]
         assert loaded[0].edge_density == 5
 
+    def test_save_empty_features_truncates_stale_file(self, tmp_path):
+        from kb_agent.graph.storage import GraphStorage
+
+        storage = GraphStorage(tmp_path / "graph")
+        storage.save_features([
+            Feature(
+                id="feature.auth",
+                name="auth",
+                member_node_ids=["n1"],
+                naming_basis="auth",
+                edge_density=1,
+            ),
+        ])
+        storage.save_features([])
+
+        assert storage.load_features() == []
+        assert (tmp_path / "graph" / "features.jsonl").read_text(encoding="utf-8") == ""
+
     def test_load_nonexistent(self, tmp_path):
         from kb_agent.graph.storage import GraphStorage
         storage = GraphStorage(tmp_path / "graph")
@@ -238,3 +256,5 @@ class TestFeatureView:
         assert len(entries) == 1
         assert entries[0].layer == Layer.FEATURE
         assert entries[0].static.source == "feature_overlay"
+        assert entries[0].ai.summary
+        assert "auth_validate" in entries[0].ai.summary

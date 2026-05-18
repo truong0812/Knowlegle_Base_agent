@@ -100,6 +100,8 @@ class TestStrategyIntegration:
         # With 3 hops and outgoing only, should reach b, c, d
         all_ids = {n.id for n in subgraph.all_nodes}
         assert "d" in all_ids
+        assert [n.id for n in subgraph.hop2_nodes] == ["c"]
+        assert [n.id for n in subgraph.hop3_nodes] == ["d"]
 
     def test_relationship_finds_callers(self):
         """RELATIONSHIP strategy should find incoming callers."""

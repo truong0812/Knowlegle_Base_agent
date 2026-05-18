@@ -183,8 +183,8 @@ class TestDecoratorScopeResolution:
         factory_node = [n for n in builder.nodes if n.name == "create"][0]
         assert "staticmethod" in factory_node.modifiers
 
-    def test_injected_method_confidence_lowered(self):
-        """@inject decorated method gets lower confidence on edges targeting it."""
+    def test_same_file_injected_method_confidence_not_lowered(self):
+        """Deterministic same-file edges should not be capped by @inject."""
         injected_method = _make_symbol(
             "process", kind=SymbolKind.FUNCTION, line_start=5, line_end=10,
             modifiers=["injected"],
@@ -208,11 +208,46 @@ class TestDecoratorScopeResolution:
 
         calls = [e for e in builder.edges if e.kind == EdgeKind.CALLS and "process" in e.target]
         assert len(calls) >= 1
-        # Confidence should be capped at 0.50 for injected methods
         for call in calls:
-            assert call.confidence <= 0.50
+            assert call.resolution == "same_file"
+            assert call.confidence == 0.80
 
-    def test_parsed_inject_decorator_is_normalized_and_capped(self):
+    def test_injected_method_caps_type_inferred_confidence(self):
+        """@inject should cap heuristic type-inferred edges."""
+        injected_method = _make_symbol(
+            "process", kind=SymbolKind.FUNCTION, line_start=5, line_end=10,
+            modifiers=["injected"],
+        )
+        cls = _make_symbol(
+            "Service", kind=SymbolKind.CLASS, line_start=1, line_end=12,
+            children=[injected_method],
+        )
+        factory = _make_symbol(
+            "get_service", kind=SymbolKind.FUNCTION, line_start=15, line_end=20,
+            return_type="Service",
+        )
+        handler = _make_symbol("handler", kind=SymbolKind.FUNCTION, line_start=25, line_end=40)
+
+        builder = GraphBuilder(repo_name="repo")
+        builder.build({
+            "src/svc.py": _make_parse_result(
+                symbols=[cls, factory, handler],
+                calls=[CallInfo(
+                    caller_name="handler", callee_name="process", line=35,
+                    resolution_method="dynamic_dispatch", receiver="svc",
+                )],
+                assignments=[AssignmentInfo(
+                    variable_name="svc", callee_name="get_service", line=34,
+                )],
+            ),
+        })
+
+        calls = [e for e in builder.edges if e.kind == EdgeKind.CALLS and "process" in e.target]
+        assert len(calls) == 1
+        assert calls[0].resolution == "type_inferred"
+        assert calls[0].confidence == 0.50
+
+    def test_parsed_inject_decorator_is_normalized(self):
         """Parsed @container.inject should become the canonical injected modifier."""
         source = b"""
 class Service:
@@ -236,7 +271,8 @@ def handler():
             if e.kind == EdgeKind.CALLS and "process" in e.target
         ]
         assert calls
-        assert all(call.confidence <= 0.50 for call in calls)
+        for call in calls:
+            assert call.confidence == 0.80
 
 
 class TestTypeInferenceResolution:
@@ -304,6 +340,53 @@ class TestTypeInferenceResolution:
 
         calls = [e for e in builder.edges if e.kind == EdgeKind.CALLS]
         assert calls == []
+
+    def test_type_inference_prefers_same_file_factory_on_name_collision(self):
+        """Same-name factories in other files should not drive local inference."""
+        local_method = _make_symbol("login", kind=SymbolKind.FUNCTION, line_start=5, line_end=10)
+        local_cls = _make_symbol(
+            "LocalService", kind=SymbolKind.CLASS, line_start=1, line_end=15,
+            children=[local_method],
+        )
+        other_method = _make_symbol("login", kind=SymbolKind.FUNCTION, line_start=5, line_end=10)
+        other_cls = _make_symbol(
+            "OtherService", kind=SymbolKind.CLASS, line_start=1, line_end=15,
+            children=[other_method],
+        )
+        other_factory = _make_symbol(
+            "get_service", kind=SymbolKind.FUNCTION, line_start=20, line_end=25,
+            return_type="OtherService",
+        )
+        local_factory = _make_symbol(
+            "get_service", kind=SymbolKind.FUNCTION, line_start=20, line_end=25,
+            return_type="LocalService",
+        )
+        handler = _make_symbol("handle", kind=SymbolKind.FUNCTION, line_start=30, line_end=45)
+
+        builder = GraphBuilder(repo_name="repo")
+        builder.build({
+            "src/other.py": _make_parse_result(
+                file_path="src/other.py",
+                symbols=[other_cls, other_factory],
+            ),
+            "src/main.py": _make_parse_result(
+                file_path="src/main.py",
+                symbols=[local_cls, local_factory, handler],
+                calls=[CallInfo(
+                    caller_name="handle", callee_name="login", line=40,
+                    resolution_method="dynamic_dispatch", receiver="svc",
+                )],
+                assignments=[AssignmentInfo(
+                    variable_name="svc", callee_name="get_service", line=39,
+                )],
+            ),
+        })
+
+        calls = [e for e in builder.edges if e.kind == EdgeKind.CALLS]
+        assert len(calls) == 1
+        assert calls[0].resolution == "type_inferred"
+        assert "LocalService.login" in calls[0].target
+        assert "OtherService.login" not in calls[0].target
 
     def test_parser_to_builder_type_inferred_call(self):
         """Real parser output should resolve receiver calls via return type."""

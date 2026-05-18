@@ -8,6 +8,13 @@ from kb_agent.parser.base import normalize_decorator
 
 logger = logging.getLogger(__name__)
 
+DECORATOR_CONFIDENCE_RESOLUTIONS = {
+    "aliased_import",
+    "dynamic_dispatch",
+    "inherited_scope",
+    "type_inferred",
+}
+
 class EnhancedResolver:
     """Post-build resolver for inherited calls and decorator confidence rules."""
 
@@ -88,7 +95,11 @@ class EnhancedResolver:
                 continue
 
             normalized_mods = {normalize_decorator(m) for m in target_node.modifiers}
-            if "injected" in normalized_mods and edge.confidence > 0.50:
+            if (
+                "injected" in normalized_mods
+                and edge.resolution in DECORATOR_CONFIDENCE_RESOLUTIONS
+                and edge.confidence > 0.50
+            ):
                 edge.confidence = 0.50
                 adjusted += 1
 

@@ -19,11 +19,12 @@ class ExpandedSubgraph:
     seed_nodes: list[SymbolNode]
     hop1_nodes: list[SymbolNode]
     hop2_nodes: list[SymbolNode]
+    hop3_nodes: list[SymbolNode] = field(default_factory=list)
     relevant_edges: list[SymbolEdge] = field(default_factory=list)
 
     @property
     def all_nodes(self) -> list[SymbolNode]:
-        return self.seed_nodes + self.hop1_nodes + self.hop2_nodes
+        return self.seed_nodes + self.hop1_nodes + self.hop2_nodes + self.hop3_nodes
 
 
 def expand_from_seeds(
@@ -112,7 +113,8 @@ def expand_from_seeds(
     return ExpandedSubgraph(
         seed_nodes=[n for nid, n in included.items() if hop_of[nid] == 0],
         hop1_nodes=[n for nid, n in included.items() if hop_of[nid] == 1],
-        hop2_nodes=[n for nid, n in included.items() if hop_of[nid] >= 2],
+        hop2_nodes=[n for nid, n in included.items() if hop_of[nid] == 2],
+        hop3_nodes=[n for nid, n in included.items() if hop_of[nid] == 3],
         relevant_edges=decayed_edges,
     )
 

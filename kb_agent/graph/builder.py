@@ -468,29 +468,58 @@ class GraphBuilder:
             return None
         assigned_callee = max(candidates, key=lambda asgn: asgn.line).callee_name
 
-        # Find that function's return type
-        ret_type: str | None = None
-        for nid in self._name_to_ids.get(assigned_callee, []):
-            node = self._node_index.get(nid)
-            if node and node.return_type:
-                ret_type = node.return_type
-                break
+        # Find that function's return type, preferring local/imported candidates
+        # over same-name functions elsewhere in the repo.
+        ret_type = self._find_return_type_for_assignment(assigned_callee, file_path)
         if not ret_type:
             return None
 
         # Resolve return type to a class node
-        class_id = self._resolve_type_to_class_id(ret_type)
+        class_id = self._resolve_type_to_class_id(ret_type, preferred_file=file_path)
         if not class_id:
             return None
 
         # Find the method on that class
         return self._class_children.get(class_id, {}).get(callee_name)
 
-    def _resolve_type_to_class_id(self, type_name: str) -> str | None:
+    def _find_return_type_for_assignment(
+        self, assigned_callee: str, file_path: str,
+    ) -> str | None:
+        """Find a factory function return type with local/import precedence."""
+        ids = self._name_to_ids.get(assigned_callee, [])
+        imported_file = self._import_map.get(file_path, {}).get(assigned_callee)
+
+        def priority(node_id: str) -> int:
+            node = self._node_index.get(node_id)
+            if not node:
+                return 3
+            if node.path == file_path:
+                return 0
+            if imported_file and node.path == imported_file:
+                return 1
+            return 2
+
+        for nid in sorted(ids, key=priority):
+            node = self._node_index.get(nid)
+            if node and node.return_type:
+                return node.return_type
+        return None
+
+    def _resolve_type_to_class_id(
+        self, type_name: str, preferred_file: str | None = None,
+    ) -> str | None:
         """Resolve a type name string to a class node ID."""
         clean = type_name.strip("[]").split("[")[-1].strip("]").strip()
         clean = clean.split(".")[-1]
-        for nid in self._name_to_ids.get(clean, []):
+        ids = self._name_to_ids.get(clean, [])
+        if preferred_file:
+            ids = sorted(
+                ids,
+                key=lambda nid: 0
+                if (self._node_index.get(nid) and self._node_index[nid].path == preferred_file)
+                else 1,
+            )
+        for nid in ids:
             node = self._node_index.get(nid)
             if node and node.kind == SymbolKind.CLASS:
                 return nid
