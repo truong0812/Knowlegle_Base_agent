@@ -77,12 +77,14 @@ class FeatureExtractor:
 
     def build_noun_to_nodes(self) -> dict[str, list[str]]:
         """Build noun → [node_ids] reverse index. Only nouns appearing in 2+ nodes."""
+        noun_cache: dict[str, list[str]] = {}
         noun_map: dict[str, list[str]] = {}
         for node in self._nodes:
             if ViewIDMapper.is_utility_name(node.name):
                 continue
-            nouns = self.extract_nouns(node.name)
-            for noun in nouns:
+            if node.name not in noun_cache:
+                noun_cache[node.name] = self.extract_nouns(node.name)
+            for noun in noun_cache[node.name]:
                 noun_map.setdefault(noun, []).append(node.id)
 
         # Filter: only keep nouns with 2+ nodes

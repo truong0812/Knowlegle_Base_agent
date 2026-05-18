@@ -59,17 +59,19 @@ class ConfidencePropagator:
         edge_bonus = min(high_conf_incoming_count × EDGE_BONUS_FACTOR, MAX_EDGE_BONUS)
         Only applied when node has >= EDGE_BONUS_MIN_EDGES high-confidence incoming edges.
         """
-        incoming_by_target: dict[str, list[SymbolEdge]] = {}
+        # Pre-index only high-confidence incoming edges to avoid
+        # per-node filtering on every iteration.
+        high_conf_by_target: dict[str, int] = {}
         for edge in self._edges:
-            incoming_by_target.setdefault(edge.target, []).append(edge)
+            if edge.confidence >= HIGH_CONFIDENCE_THRESHOLD:
+                high_conf_by_target[edge.target] = (
+                    high_conf_by_target.get(edge.target, 0) + 1
+                )
 
         result: dict[str, NodeConfidence] = {}
         for node in self._nodes:
             base = node.confidence  # Default 1.0 from SymbolNode
-            incoming = incoming_by_target.get(node.id, [])
-            high_conf_count = sum(
-                1 for e in incoming if e.confidence >= HIGH_CONFIDENCE_THRESHOLD
-            )
+            high_conf_count = high_conf_by_target.get(node.id, 0)
             edge_bonus = 0.0
             if high_conf_count >= EDGE_BONUS_MIN_EDGES:
                 edge_bonus = min(

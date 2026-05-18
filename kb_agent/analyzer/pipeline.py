@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
+from itertools import chain
 from pathlib import Path
 
 from kb_agent.models.entry import KBEntry
@@ -157,7 +158,7 @@ class AnalysisPipeline:
     ) -> list[KBEntry]:
         """Set children fields on parent entries."""
         entry_map: dict[str, KBEntry] = {}
-        all_entries = arch + mod + file + (mem if mem else []) + (features if features else [])
+        all_entries = list(chain(arch, mod, file, mem or [], features or []))
         for entry in all_entries:
             entry_map[entry.id] = entry
 
