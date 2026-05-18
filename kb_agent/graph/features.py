@@ -107,49 +107,56 @@ class FeatureExtractor:
         return features
 
     def merge_overlapping(self, features: list[Feature]) -> list[Feature]:
-        """Merge features with Jaccard overlap >= threshold."""
+        """Merge features with Jaccard overlap >= threshold via Union-Find."""
         if not features:
             return []
 
-        merged = list(features)
-        changed = True
-        while changed:
-            changed = False
-            result: list[Feature] = []
-            used: set[int] = set()
+        n = len(features)
+        parent = list(range(n))
 
-            for i, a in enumerate(merged):
-                if i in used:
+        def find(x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(x: int, y: int) -> None:
+            rx, ry = find(x), find(y)
+            if rx != ry:
+                parent[ry] = rx
+
+        member_sets = [set(f.member_node_ids) for f in features]
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                if find(i) == find(j):
                     continue
-                current = a
-                for j in range(i + 1, len(merged)):
-                    if j in used:
-                        continue
-                    b = merged[j]
-                    overlap = self._jaccard(
-                        set(current.member_node_ids),
-                        set(b.member_node_ids),
-                    )
-                    if overlap >= MERGE_OVERLAP_THRESHOLD:
-                        # Merge b into current
-                        combined = list(set(current.member_node_ids + b.member_node_ids))
-                        density = self._compute_edge_density(combined)
-                        # Keep the name with higher edge density
-                        naming = current.naming_basis if current.edge_density >= b.edge_density else b.naming_basis
-                        current = Feature(
-                            id=f"feature.{naming}",
-                            name=naming,
-                            member_node_ids=sorted(combined),
-                            naming_basis=naming,
-                            edge_density=density,
-                        )
-                        used.add(j)
-                        changed = True
-                result.append(current)
+                if self._jaccard(member_sets[i], member_sets[j]) >= MERGE_OVERLAP_THRESHOLD:
+                    union(i, j)
 
-            merged = result
+        # Group by root and build merged features
+        groups: dict[int, list[int]] = {}
+        for i in range(n):
+            groups.setdefault(find(i), []).append(i)
 
-        return merged
+        result: list[Feature] = []
+        for indices in groups.values():
+            if len(indices) == 1:
+                result.append(features[indices[0]])
+                continue
+
+            best = max(indices, key=lambda i: features[i].edge_density)
+            combined = sorted(set().union(*(member_sets[i] for i in indices)))
+            density = self._compute_edge_density(combined)
+            result.append(Feature(
+                id=f"feature.{features[best].naming_basis}",
+                name=features[best].naming_basis,
+                member_node_ids=combined,
+                naming_basis=features[best].naming_basis,
+                edge_density=density,
+            ))
+
+        return result
 
     def extract_features(self) -> list[Feature]:
         """Full extraction pipeline: nouns → cluster → merge → density."""
