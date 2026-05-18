@@ -52,14 +52,10 @@ class FeatureExtractor:
         self._nodes = nodes
         self._edges = edges
 
-        # Pre-build edge adjacency for density computation
-        self._edge_set: set[tuple[str, str]] = set()
+        # Pre-build adjacency map for O(neighbors) density lookups
+        self._adjacency: dict[str, set[str]] = {}
         for edge in edges:
-            self._edge_set.add((edge.source, edge.target))
-            self._edge_set.add((edge.target, edge.source))
-
-        # Node ID set for membership checks
-        self._node_ids: set[str] = {n.id for n in nodes}
+            self._adjacency.setdefault(edge.source, set()).add(edge.target)
 
     def extract_nouns(self, name: str) -> list[str]:
         """Extract meaningful nouns from a symbol name.
@@ -131,6 +127,9 @@ class FeatureExtractor:
             for j in range(i + 1, n):
                 if find(i) == find(j):
                     continue
+                # Early exit: skip pairs that share no elements
+                if not member_sets[i] & member_sets[j]:
+                    continue
                 if self._jaccard(member_sets[i], member_sets[j]) >= MERGE_OVERLAP_THRESHOLD:
                     union(i, j)
 
@@ -173,13 +172,13 @@ class FeatureExtractor:
     # ── Helpers ──────────────────────────────────────────────────
 
     def _compute_edge_density(self, node_ids: list[str]) -> int:
-        """Count edges between member nodes."""
+        """Count edges between member nodes using pre-built adjacency."""
         node_set = set(node_ids)
-        count = 0
-        for edge in self._edges:
-            if edge.source in node_set and edge.target in node_set:
-                count += 1
-        return count
+        return sum(
+            1 for nid in node_ids
+            for nb in self._adjacency.get(nid, ())
+            if nb in node_set
+        )
 
     @staticmethod
     def _jaccard(a: set[str], b: set[str]) -> float:

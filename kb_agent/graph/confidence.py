@@ -6,6 +6,7 @@ Computes:
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 
 from kb_agent.models.graph import SymbolEdge, SymbolNode
@@ -59,14 +60,10 @@ class ConfidencePropagator:
         edge_bonus = min(high_conf_incoming_count × EDGE_BONUS_FACTOR, MAX_EDGE_BONUS)
         Only applied when node has >= EDGE_BONUS_MIN_EDGES high-confidence incoming edges.
         """
-        # Pre-index only high-confidence incoming edges to avoid
-        # per-node filtering on every iteration.
-        high_conf_by_target: dict[str, int] = {}
+        high_conf_by_target: dict[str, int] = defaultdict(int)
         for edge in self._edges:
             if edge.confidence >= HIGH_CONFIDENCE_THRESHOLD:
-                high_conf_by_target[edge.target] = (
-                    high_conf_by_target.get(edge.target, 0) + 1
-                )
+                high_conf_by_target[edge.target] += 1
 
         result: dict[str, NodeConfidence] = {}
         for node in self._nodes:
