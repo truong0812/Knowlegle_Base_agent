@@ -34,6 +34,8 @@ class AnalysisPipeline:
         llm_client: LLMClient | None = None,
         build_graph: bool = False,
         module_depth: int = 1,
+        version_id: str | None = None,
+        detect_bridges: bool = False,
     ) -> None:
         self._repo_root = repo_root.resolve()
         self._out_dir = out_dir.resolve()
@@ -41,6 +43,8 @@ class AnalysisPipeline:
         self._scanner = FileScanner(repo_root)
         self._build_graph = build_graph
         self._module_depth = module_depth
+        self._version_id = version_id
+        self._detect_bridges = detect_bridges
 
     async def run(self) -> Manifest:
         """Run full pipeline: scan → parse → graph (opt) → views/layers → write."""
@@ -123,15 +127,69 @@ class AnalysisPipeline:
         from kb_agent.graph.storage import GraphStorage
 
         builder = GraphBuilder(repo_name=self._repo_root.name)
-        builder.build(parse_results, repo_root=self._repo_root)
+        builder.build(parse_results, repo_root=self._repo_root, detect_bridges=self._detect_bridges)
 
         storage = GraphStorage(self._out_dir / "graph")
         storage.save(builder.nodes, builder.edges)
+
+        # Hot-path scoring
+        from kb_agent.graph.hotpath import HotPathScorer
+        scorer = HotPathScorer(builder.nodes, builder.edges)
+        hotpath_scores = scorer.score_nodes()
+        storage.save_hotpath(hotpath_scores)
+
+        # Temporal snapshot
+        self._save_temporal_snapshot(builder.nodes, builder.edges)
 
         logger.info(
             "Graph built: %d nodes, %d edges",
             len(builder.nodes), len(builder.edges),
         )
+
+    def _save_temporal_snapshot(
+        self, nodes: list, edges: list,
+    ) -> None:
+        """Save a versioned temporal snapshot of the graph."""
+        from kb_agent.graph.temporal import TemporalGraphManager
+
+        version_id = self._version_id or self._detect_version_id()
+        parent_version = None
+        manager = TemporalGraphManager(self._out_dir / "graph")
+        latest = manager.latest_version()
+        if latest:
+            parent_version = latest.version_id
+
+        manager.save_snapshot(
+            version_id=version_id,
+            nodes=nodes,
+            edges=edges,
+            commit_hash=self._detect_git_hash(),
+            parent_version=parent_version,
+        )
+        logger.info("Temporal snapshot saved: %s", version_id)
+
+    def _detect_version_id(self) -> str:
+        """Generate a version ID from git hash or timestamp."""
+        git_hash = self._detect_git_hash()
+        if git_hash:
+            return f"v-{git_hash[:8]}"
+        from datetime import datetime
+        return f"v-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+    def _detect_git_hash(self) -> str | None:
+        """Try to detect current git commit hash."""
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True, text=True,
+                cwd=str(self._repo_root),
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except (FileNotFoundError, OSError):
+            pass
+        return None
 
     def _parse_all(self, file_entries) -> dict[str, ParseResult]:
         """Parse every file. Returns dict keyed by rel_path."""
@@ -223,7 +281,8 @@ class AnalysisPipeline:
         """Build FAISS vector index from entries. Skips if dependencies missing."""
         try:
             from kb_agent.indexer.indexer import KBIndexer
+            graph_dir = self._out_dir / "graph" if self._build_graph else None
             indexer = KBIndexer()
-            indexer.build_index(entries, self._out_dir / "index")
+            indexer.build_index(entries, self._out_dir / "index", graph_dir=graph_dir)
         except ImportError:
             logger.info("Skipping index build — sentence-transformers/faiss not installed")

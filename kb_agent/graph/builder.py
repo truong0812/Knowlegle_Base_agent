@@ -49,6 +49,7 @@ class GraphBuilder:
         self,
         parse_results: dict[str, ParseResult],
         repo_root: Path | None = None,
+        detect_bridges: bool = False,
     ) -> None:
         """Build graph from all parse results."""
         self._build_import_map(parse_results)
@@ -66,6 +67,9 @@ class GraphBuilder:
 
         self._enhanced_resolve(parse_results)
         self._propagate_confidences()
+
+        if detect_bridges:
+            self._detect_cross_language_bridges()
 
     @property
     def nodes(self) -> list[SymbolNode]:
@@ -99,6 +103,14 @@ class GraphBuilder:
         self._class_children.setdefault(parent_id, {})[child_name] = child_id
 
     # ── Phase 8: Enhanced Resolution ─────────────────────────────
+
+    def _detect_cross_language_bridges(self) -> None:
+        """Detect cross-language bridges using BridgeDetector."""
+        from kb_agent.graph.bridge import BridgeDetector
+
+        detector = BridgeDetector()
+        bridge_edges = detector.detect_bridges(self._nodes, self._edges)
+        self._edges.extend(bridge_edges)
 
     def _enhanced_resolve(self, parse_results: dict[str, ParseResult]) -> None:
         """Post-build enhanced symbol resolution."""

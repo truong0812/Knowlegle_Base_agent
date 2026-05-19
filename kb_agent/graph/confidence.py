@@ -24,6 +24,15 @@ EDGE_BONUS_MIN_EDGES = 3
 EDGE_BONUS_FACTOR = 0.10
 MAX_EDGE_BONUS = 0.30
 
+# Cross-language bridge confidence values
+BRIDGE_CONFIDENCE_RANGES: dict[str, tuple[float, float]] = {
+    "http_exact_route": (0.65, 0.75),
+    "http_pattern_match": (0.45, 0.55),
+    "data_contract_name_fields": (0.50, 0.65),
+    "data_contract_name_only": (0.35, 0.50),
+    "message_queue": (0.30, 0.45),
+}
+
 
 @dataclass
 class NodeConfidence:

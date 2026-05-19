@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from kb_agent.graph.hotpath import HotPathScore
 from kb_agent.graph.storage import GraphStorage
 from kb_agent.query.composer import RetrievalMetrics, RetrievalResult, compose_context
 from kb_agent.query.expander import expand_from_seeds
@@ -33,6 +34,7 @@ class RetrievalEngine:
         self._query_engine = QueryEngine(kb_dir, model_name=model_name)
         self._top_k = top_k
         self._mapper: ViewIDMapper | None = None
+        self._hotpath: dict[str, HotPathScore] | None = None
 
     def retrieve(self, question: str, top_k: int | None = None) -> RetrievalResult:
         """Run full retrieval pipeline."""
@@ -63,11 +65,29 @@ class RetrievalEngine:
         planner = QueryPlanner()
         strategy = planner.plan(intent)
         subgraph = expand_from_seeds(mapping.seed_nodes, mapper, strategy=strategy)
+
+        hotpath_scores = self._load_hotpath(graph_dir)
+        hot_map = {nid: s.hotness for nid, s in hotpath_scores.items()} if hotpath_scores else None
+
+        # Chain detection for CHAIN_TRACE intent
+        chains = None
+        if intent == QueryIntent.CHAIN_TRACE:
+            from kb_agent.query.chain import CausalChainDetector
+            included = {n.id: n for n in subgraph.all_nodes}
+            detector = CausalChainDetector(mapper, hot_map)
+            chains = detector.detect_chains(
+                seed_ids=[n.id for n in mapping.seed_nodes],
+                included_nodes=included,
+                edges=subgraph.relevant_edges,
+            )
+
         result = compose_context(
             subgraph=subgraph,
             seed_entries=seed_entries,
             unmapped_entries=mapping.unmapped_entries,
             intent=intent,
+            hot_path_scores=hot_map,
+            chains=chains,
         )
         result.metrics.query = question
         return result
@@ -77,6 +97,11 @@ class RetrievalEngine:
             nodes, edges = GraphStorage(graph_dir).load()
             self._mapper = ViewIDMapper(nodes, edges)
         return self._mapper
+
+    def _load_hotpath(self, graph_dir: Path) -> dict[str, HotPathScore]:
+        if self._hotpath is None:
+            self._hotpath = GraphStorage(graph_dir).load_hotpath()
+        return self._hotpath
 
     def _entry_only_result(
         self,

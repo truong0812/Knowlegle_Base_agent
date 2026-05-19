@@ -14,6 +14,7 @@ class EdgeKind(str, Enum):
     IMPLEMENTS = "implements"
     CONTAINS = "contains"
     USES_TYPE = "uses_type"
+    BRIDGES_TO = "bridges_to"
 
 
 class SymbolNode(BaseModel):
@@ -39,3 +40,4 @@ class SymbolEdge(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     source_type: str = "deterministic"
     resolution: str = "direct"
+    bridge_metadata: dict[str, str] | None = None

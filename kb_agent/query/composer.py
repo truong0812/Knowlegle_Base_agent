@@ -38,6 +38,8 @@ def compose_context(
     seed_entries: list[KBEntry],
     unmapped_entries: list[KBEntry],
     intent: QueryIntent,
+    hot_path_scores: dict[str, float] | None = None,
+    chains: list | None = None,
 ) -> RetrievalResult:
     """Compose structured context from expanded subgraph."""
     ratios = INTENT_BUDGET_RATIOS[intent]
@@ -45,13 +47,14 @@ def compose_context(
 
     entry_lookup = _build_entry_lookup(seed_entries)
     sections: list[str] = []
-    allocation: dict[str, int] = {"entry": 0, "hop1": 0, "hop2": 0, "hop3": 0, "meta": 0}
+    allocation: dict[str, int] = {"entry": 0, "hop1": 0, "hop2": 0, "hop3": 0, "hop4": 0, "chain": 0, "meta": 0}
     truncated_nodes: list[str] = []
     total_tokens = 0
 
-    # Seed tier — full detail
+    # Seed tier — full detail, sorted by hotness
+    seed_sorted = _sort_by_hotness(subgraph.seed_nodes, hot_path_scores)
     seed_text, seed_tok, seed_trunc = _format_tier(
-        subgraph.seed_nodes, entry_lookup, budgets["entry"], "full",
+        seed_sorted, entry_lookup, budgets["entry"], "full",
     )
     if seed_text:
         sections.append(f"=== PRIMARY RESULTS ===\n{seed_text}")
@@ -60,8 +63,9 @@ def compose_context(
     total_tokens += seed_tok
 
     # 1-hop tier — summary
+    hop1_sorted = _sort_by_hotness(subgraph.hop1_nodes, hot_path_scores)
     hop1_text, hop1_tok, hop1_trunc = _format_tier(
-        subgraph.hop1_nodes, entry_lookup, budgets["hop1"], "summary",
+        hop1_sorted, entry_lookup, budgets["hop1"], "summary",
     )
     if hop1_text:
         sections.append(f"=== RELATED (1-hop) ===\n{hop1_text}")
@@ -70,8 +74,9 @@ def compose_context(
     total_tokens += hop1_tok
 
     # 2-hop tier — minimal
+    hop2_sorted = _sort_by_hotness(subgraph.hop2_nodes, hot_path_scores)
     hop2_text, hop2_tok, hop2_trunc = _format_tier(
-        subgraph.hop2_nodes, entry_lookup, budgets["hop2"], "minimal",
+        hop2_sorted, entry_lookup, budgets["hop2"], "minimal",
     )
     if hop2_text:
         sections.append(f"=== CONTEXT (2-hop) ===\n{hop2_text}")
@@ -80,14 +85,35 @@ def compose_context(
     total_tokens += hop2_tok
 
     # 3-hop tier - minimal, used by flow-trace expansion.
+    hop3_sorted = _sort_by_hotness(subgraph.hop3_nodes, hot_path_scores)
     hop3_text, hop3_tok, hop3_trunc = _format_tier(
-        subgraph.hop3_nodes, entry_lookup, budgets.get("hop3", 0), "minimal",
+        hop3_sorted, entry_lookup, budgets.get("hop3", 0), "minimal",
     )
     if hop3_text:
         sections.append(f"=== CONTEXT (3-hop) ===\n{hop3_text}")
     allocation["hop3"] = hop3_tok
     truncated_nodes.extend(hop3_trunc)
     total_tokens += hop3_tok
+
+    # 4-hop tier — minimal, for chain-trace expansion
+    hop4_sorted = _sort_by_hotness(subgraph.hop4_nodes, hot_path_scores)
+    hop4_text, hop4_tok, hop4_trunc = _format_tier(
+        hop4_sorted, entry_lookup, budgets.get("hop4", 0), "minimal",
+    )
+    if hop4_text:
+        sections.append(f"=== CONTEXT (4-hop) ===\n{hop4_text}")
+    allocation["hop4"] = hop4_tok
+    truncated_nodes.extend(hop4_trunc)
+    total_tokens += hop4_tok
+
+    # Chain tier — causal chains for CHAIN_TRACE intent
+    chain_budget = budgets.get("chain", 0)
+    if chains and chain_budget > 0:
+        chain_text = _format_chains(chains, hot_path_scores, chain_budget)
+        if chain_text:
+            sections.append(f"=== CALL CHAINS ===\n{chain_text}")
+            allocation["chain"] = _estimate_tokens(chain_text)
+            total_tokens += allocation["chain"]
 
     # Meta tier — arch/mod/file entries
     meta_text, meta_tok = _format_meta(unmapped_entries, budgets["meta"])
@@ -146,6 +172,38 @@ def _build_entry_lookup(
     entries: list[KBEntry],
 ) -> dict[tuple[str, int], KBEntry]:
     return {(e.static.path, e.static.line_start): e for e in entries if e.layer.value == "mem"}
+
+
+def _sort_by_hotness(
+    nodes: list[SymbolNode],
+    scores: dict[str, float] | None,
+) -> list[SymbolNode]:
+    if not scores:
+        return nodes
+    return sorted(nodes, key=lambda n: scores.get(n.id, 0.0), reverse=True)
+
+
+def _format_chains(
+    chains: list,
+    scores: dict[str, float] | None,
+    budget: int,
+) -> str:
+    if not chains:
+        return ""
+    lines: list[str] = []
+    used = 0
+    for i, chain in enumerate(chains):
+        parts: list[str] = []
+        for j, nid in enumerate(chain.nodes):
+            name = nid.split("::")[-1].split("(")[0] if "::" in nid else nid
+            parts.append(name)
+        line = f"{i + 1}. {' -> '.join(parts)} (length={chain.length})"
+        line_tok = _estimate_tokens(line)
+        if used + line_tok > budget:
+            break
+        lines.append(line)
+        used += line_tok
+    return "\n".join(lines)
 
 
 def _format_tier(
@@ -243,7 +301,15 @@ def _format_edges(edges: list[SymbolEdge]) -> str:
         if key in seen:
             continue
         seen.add(key)
-        lines.append(f"{_short_id(e.source)} --{e.kind.value}--> {_short_id(e.target)} (conf: {e.confidence:.2f})")
+        meta = ""
+        if e.bridge_metadata:
+            proto = e.bridge_metadata.get("protocol", "")
+            route = e.bridge_metadata.get("route", "")
+            if proto and route:
+                meta = f" [{proto}:{route}]"
+            elif proto:
+                meta = f" [{proto}]"
+        lines.append(f"{_short_id(e.source)} --{e.kind.value}--> {_short_id(e.target)} (conf: {e.confidence:.2f}){meta}")
     return "\n".join(lines)
 
 

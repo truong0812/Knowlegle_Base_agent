@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from kb_agent.graph.features import Feature
+from kb_agent.graph.hotpath import HotPathScore
 from kb_agent.models.graph import SymbolEdge, SymbolNode
 
 
@@ -86,6 +87,24 @@ class GraphStorage:
             if edge.target in adj:
                 adj[edge.target]["incoming"].append(edge_id)
         return adj
+
+    def save_hotpath(self, scores: dict[str, HotPathScore]) -> None:
+        """Write hotpath.json."""
+        self._dir.mkdir(parents=True, exist_ok=True)
+        path = self._dir / "hotpath.json"
+        data = {
+            nid: {"node_id": s.node_id, "incoming_calls": s.incoming_calls, "hotness": s.hotness}
+            for nid, s in scores.items()
+        }
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def load_hotpath(self) -> dict[str, HotPathScore]:
+        """Load hot-path scores from disk."""
+        path = self._dir / "hotpath.json"
+        if not path.exists():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return {nid: HotPathScore(**s) for nid, s in data.items()}
 
     @staticmethod
     def _load_jsonl(path: Path, model_class: type) -> list:
