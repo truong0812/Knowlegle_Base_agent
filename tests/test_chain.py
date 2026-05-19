@@ -141,3 +141,22 @@ class TestCausalChainDetector:
         ratios = INTENT_BUDGET_RATIOS[QueryIntent.CHAIN_TRACE]
         assert "chain" in ratios
         assert ratios["chain"] > 0
+        assert "hop4" in ratios
+        assert ratios["hop4"] > 0
+        # Ratios must sum to 1.0
+        assert abs(sum(ratios.values()) - 1.0) < 0.01
+
+    def test_hop4_respects_budget(self):
+        """hop4 nodes are skipped when hop4 budget is 0."""
+        from kb_agent.query.composer import compose_context
+        a = _node("a")
+        hop4 = _node("hop4_node")
+        subgraph = ExpandedSubgraph(seed_nodes=[a], hop1_nodes=[], hop2_nodes=[], hop3_nodes=[], hop4_nodes=[hop4])
+        # DEFAULT intent has no hop4 budget
+        result = compose_context(
+            subgraph=subgraph,
+            seed_entries=[],
+            unmapped_entries=[],
+            intent=QueryIntent.DEFAULT,
+        )
+        assert "4-hop" not in result.context

@@ -31,7 +31,6 @@ class TemporalGraphManager:
         version_dir = self._versions_dir / version_id
         version_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write nodes and edges using GraphStorage into version dir
         storage = GraphStorage(version_dir)
         storage.save(nodes, edges)
 
@@ -80,36 +79,55 @@ class TemporalGraphManager:
         return versions[-1] if versions else None
 
     def diff_versions(self, from_id: str, to_id: str) -> VersionDiff:
-        """Compute diff between two versions."""
+        """Compute diff between two stored versions."""
         from_nodes, from_edges = self.load_snapshot(from_id)
         to_nodes, to_edges = self.load_snapshot(to_id)
+        return diff_graphs(from_nodes, from_edges, to_nodes, to_edges, from_id, to_id)
 
-        from_node_ids = {n.id for n in from_nodes}
-        to_node_ids = {n.id for n in to_nodes}
+    def diff_against(
+        self,
+        from_id: str,
+        current_nodes: list[SymbolNode],
+        current_edges: list[SymbolEdge],
+    ) -> VersionDiff:
+        """Diff a stored version against in-memory graph data."""
+        from_nodes, from_edges = self.load_snapshot(from_id)
+        return diff_graphs(from_nodes, from_edges, current_nodes, current_edges, from_id, "__current__")
 
-        # Detect modified nodes (same ID but different signature/line range)
-        from_node_map = {n.id: n for n in from_nodes}
-        to_node_map = {n.id: n for n in to_nodes}
 
-        added_nodes = sorted(to_node_ids - from_node_ids)
-        removed_nodes = sorted(from_node_ids - to_node_ids)
-        modified_nodes: list[str] = []
-        for nid in from_node_ids & to_node_ids:
-            fn = from_node_map[nid]
-            tn = to_node_map[nid]
-            if fn.signature != tn.signature or fn.line_start != tn.line_start or fn.line_end != tn.line_end:
-                modified_nodes.append(nid)
+def diff_graphs(
+    from_nodes: list[SymbolNode],
+    from_edges: list[SymbolEdge],
+    to_nodes: list[SymbolNode],
+    to_edges: list[SymbolEdge],
+    from_label: str = "",
+    to_label: str = "",
+) -> VersionDiff:
+    """Pure diff logic between two graph snapshots."""
+    from_node_ids = {n.id for n in from_nodes}
+    to_node_ids = {n.id for n in to_nodes}
 
-        # Edge diff by (source, target, kind) tuples
-        from_edge_set = {(e.source, e.target, e.kind.value) for e in from_edges}
-        to_edge_set = {(e.source, e.target, e.kind.value) for e in to_edges}
+    from_node_map = {n.id: n for n in from_nodes}
+    to_node_map = {n.id: n for n in to_nodes}
 
-        added_edges = sorted(f"{s}--{k}-->{t}" for s, t, k in (to_edge_set - from_edge_set))
-        removed_edges = sorted(f"{s}--{k}-->{t}" for s, t, k in (from_edge_set - to_edge_set))
+    added_nodes = sorted(to_node_ids - from_node_ids)
+    removed_nodes = sorted(from_node_ids - to_node_ids)
+    modified_nodes: list[str] = []
+    for nid in from_node_ids & to_node_ids:
+        fn = from_node_map[nid]
+        tn = to_node_map[nid]
+        if fn.signature != tn.signature or fn.line_start != tn.line_start or fn.line_end != tn.line_end:
+            modified_nodes.append(nid)
 
-        return VersionDiff(
-            from_version=from_id,
-            to_version=to_id,
-            node_diff=NodeDiff(added=added_nodes, removed=removed_nodes, modified=sorted(modified_nodes)),
-            edge_diff=EdgeDiff(added=added_edges, removed=removed_edges),
-        )
+    from_edge_set = {(e.source, e.target, e.kind.value) for e in from_edges}
+    to_edge_set = {(e.source, e.target, e.kind.value) for e in to_edges}
+
+    added_edges = sorted(f"{s}--{k}-->{t}" for s, t, k in (to_edge_set - from_edge_set))
+    removed_edges = sorted(f"{s}--{k}-->{t}" for s, t, k in (from_edge_set - to_edge_set))
+
+    return VersionDiff(
+        from_version=from_label,
+        to_version=to_label,
+        node_diff=NodeDiff(added=added_nodes, removed=removed_nodes, modified=sorted(modified_nodes)),
+        edge_diff=EdgeDiff(added=added_edges, removed=removed_edges),
+    )

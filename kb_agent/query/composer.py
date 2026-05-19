@@ -95,16 +95,18 @@ def compose_context(
     truncated_nodes.extend(hop3_trunc)
     total_tokens += hop3_tok
 
-    # 4-hop tier — minimal, for chain-trace expansion
-    hop4_sorted = _sort_by_hotness(subgraph.hop4_nodes, hot_path_scores)
-    hop4_text, hop4_tok, hop4_trunc = _format_tier(
-        hop4_sorted, entry_lookup, budgets.get("hop4", 0), "minimal",
-    )
-    if hop4_text:
-        sections.append(f"=== CONTEXT (4-hop) ===\n{hop4_text}")
-    allocation["hop4"] = hop4_tok
-    truncated_nodes.extend(hop4_trunc)
-    total_tokens += hop4_tok
+    # 4-hop tier — minimal, for chain-trace expansion (skip when no budget)
+    hop4_budget = budgets.get("hop4", 0)
+    if hop4_budget > 0 and subgraph.hop4_nodes:
+        hop4_sorted = _sort_by_hotness(subgraph.hop4_nodes, hot_path_scores)
+        hop4_text, hop4_tok, hop4_trunc = _format_tier(
+            hop4_sorted, entry_lookup, hop4_budget, "minimal",
+        )
+        if hop4_text:
+            sections.append(f"=== CONTEXT (4-hop) ===\n{hop4_text}")
+        allocation["hop4"] = hop4_tok
+        truncated_nodes.extend(hop4_trunc)
+        total_tokens += hop4_tok
 
     # Chain tier — causal chains for CHAIN_TRACE intent
     chain_budget = budgets.get("chain", 0)

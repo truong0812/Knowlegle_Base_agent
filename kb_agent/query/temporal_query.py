@@ -19,11 +19,8 @@ class TemporalQueryHandler:
         current_nodes: list[SymbolNode],
         current_edges: list[SymbolEdge],
     ) -> VersionDiff:
-        """Diff a stored version against the current graph state."""
-        from_nodes, from_edges = self._manager.load_snapshot(version_id)
-
-        # Build a temporary VersionDiff using the same diff logic
-        return self._manager.diff_versions(version_id, version_id) if not from_nodes else self._manager.diff_versions(version_id, "__current__")
+        """Diff a stored version against the current in-memory graph state."""
+        return self._manager.diff_against(version_id, current_nodes, current_edges)
 
     def diff_versions(self, from_id: str, to_id: str) -> VersionDiff:
         """Diff two stored versions."""

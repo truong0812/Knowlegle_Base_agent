@@ -137,6 +137,21 @@ class TestTemporalGraphManager:
         assert "Nodes added" in text
         assert "Edges added" in text
 
+    def test_diff_against_in_memory(self, graph_dir: Path):
+        manager = TemporalGraphManager(graph_dir)
+        manager.save_snapshot("v1", [_node("a")], [])
+        current_nodes = [_node("a"), _node("b")]
+        diff = manager.diff_against("v1", current_nodes, [])
+        assert _node_id("b") in diff.node_diff.added
+
+    def test_what_changed_since_uses_current_graph(self, graph_dir: Path):
+        manager = TemporalGraphManager(graph_dir)
+        manager.save_snapshot("v1", [_node("a")], [])
+        handler = TemporalQueryHandler(graph_dir)
+        current_nodes = [_node("a"), _node("c")]
+        diff = handler.what_changed_since("v1", current_nodes, [])
+        assert _node_id("c") in diff.node_diff.added
+
     def test_pipeline_saves_version(self, graph_dir: Path, tmp_path: Path):
         """AnalysisPipeline creates a versioned snapshot when build_graph=True."""
         from kb_agent.analyzer.pipeline import AnalysisPipeline
