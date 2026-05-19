@@ -50,6 +50,22 @@ STRATEGY_TABLE: dict[QueryIntent, ExpansionStrategy] = {
         follow_edge_kinds=(EdgeKind.CALLS, EdgeKind.USES_TYPE, EdgeKind.IMPORTS),
         direction="incoming",
     ),
+    QueryIntent.VERSION_DIFF: ExpansionStrategy(
+        max_hops=1,
+        max_nodes=10,
+        max_edges_per_node=3,
+        min_confidence=0.60,
+        follow_edge_kinds=(EdgeKind.CALLS, EdgeKind.CONTAINS),
+        direction="bidirectional",
+    ),
+    QueryIntent.CHAIN_TRACE: ExpansionStrategy(
+        max_hops=4,
+        max_nodes=25,
+        max_edges_per_node=8,
+        min_confidence=0.50,
+        follow_edge_kinds=(EdgeKind.CALLS, EdgeKind.IMPLEMENTS),
+        direction="outgoing",
+    ),
     QueryIntent.DEFAULT: ExpansionStrategy(
         max_hops=2,
         max_nodes=15,

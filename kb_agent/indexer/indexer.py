@@ -21,17 +21,26 @@ class KBIndexer:
             self._model = SentenceTransformer(self._model_name)
         return self._model
 
-    def build_index(self, entries: list[KBEntry], out_dir: Path) -> None:
+    def build_index(
+        self,
+        entries: list[KBEntry],
+        out_dir: Path,
+        graph_dir: Path | None = None,
+    ) -> None:
         if not entries:
             return
 
         model = self._get_model()
 
         # Build texts to embed
+        embedder = self._get_graph_embedder(graph_dir)
         texts: list[str] = []
         id_map: list[str] = []
         for entry in entries:
-            text = f"{entry.id}: {entry.ai.summary or entry.static.signature or entry.static.kind.value}"
+            if embedder:
+                text = embedder.enrich_text(entry)
+            else:
+                text = f"{entry.id}: {entry.ai.summary or entry.static.signature or entry.static.kind.value}"
             texts.append(text)
             id_map.append(entry.id)
 
@@ -49,3 +58,12 @@ class KBIndexer:
         out_dir.mkdir(parents=True, exist_ok=True)
         faiss.write_index(index, str(out_dir / "faiss.index"))
         (out_dir / "id_map.json").write_text(json.dumps(id_map), encoding="utf-8")
+
+    def _get_graph_embedder(self, graph_dir: Path | None):
+        if graph_dir is None:
+            return None
+        try:
+            from kb_agent.indexer.graph_embedding import GraphAwareEmbedder
+            return GraphAwareEmbedder.from_graph_dir(graph_dir)
+        except Exception:
+            return None

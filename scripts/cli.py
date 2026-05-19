@@ -69,6 +69,8 @@ def analyze(
     with_graph: bool = typer.Option(False, help="Build symbol graph with edge resolution"),
     depth: int = typer.Option(1, help="Module grouping depth (1=src/, 2=src/services/)"),
     model: str = typer.Option("gpt-4o", help="LLM model name"),
+    version_id: str = typer.Option(None, help="Version label for temporal snapshot"),
+    detect_bridges: bool = typer.Option(False, help="Detect cross-language bridges"),
 ) -> None:
     """Run full 3-layer analysis pipeline (scan → parse → analyze)."""
     from kb_agent.analyzer.llm import LLMClient
@@ -81,6 +83,7 @@ def analyze(
     pipeline = AnalysisPipeline(
         repo_root=repo, out_dir=out, llm_client=llm_client,
         build_graph=with_graph, module_depth=depth,
+        version_id=version_id, detect_bridges=detect_bridges,
     )
     manifest = asyncio.run(pipeline.run())
 
@@ -115,6 +118,7 @@ def validate(
 def index(
     kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
     model: str = typer.Option("all-MiniLM-L6-v2", help="Embedding model name"),
+    with_graph: bool = typer.Option(False, help="Enrich embeddings with graph context"),
 ) -> None:
     """Build or rebuild the FAISS vector index from existing KB entries."""
     from kb_agent.indexer.indexer import KBIndexer
@@ -127,8 +131,9 @@ def index(
         typer.echo("No entries found. Run `analyze` first.")
         raise typer.Exit(1)
 
+    graph_dir = kb / "graph" if with_graph else None
     indexer = KBIndexer(model_name=model)
-    indexer.build_index(entries, kb / "index")
+    indexer.build_index(entries, kb / "index", graph_dir=graph_dir)
     typer.echo(f"Indexed {len(entries)} entries -> {kb / 'index'}")
 
 
@@ -174,6 +179,41 @@ def query(
                 typer.echo(f"  {entry.ai.summary}")
             typer.echo(f"  {entry.static.path}:{entry.static.line_start}")
             typer.echo()
+
+
+@app.command()
+def versions(
+    kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
+) -> None:
+    """List stored graph versions."""
+    from kb_agent.graph.temporal import TemporalGraphManager
+
+    kb = kb.resolve()
+    manager = TemporalGraphManager(kb / "graph")
+    version_list = manager.list_versions()
+    if not version_list:
+        typer.echo("No versions found.")
+        return
+    for v in version_list:
+        commit = v.commit_hash[:8] if v.commit_hash else "n/a"
+        parent = f" (parent: {v.parent_version})" if v.parent_version else ""
+        typer.echo(f"  {v.version_id}  nodes={v.node_count}  edges={v.edge_count}  commit={commit}{parent}")
+
+
+@app.command()
+def diff(
+    from_version: str = typer.Option(..., help="Source version ID"),
+    to_version: str = typer.Option(..., help="Target version ID"),
+    kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
+) -> None:
+    """Show diff between two graph versions."""
+    from kb_agent.graph.temporal import TemporalGraphManager
+    from kb_agent.query.temporal_query import TemporalQueryHandler
+
+    kb = kb.resolve()
+    handler = TemporalQueryHandler(kb / "graph")
+    version_diff = handler.diff_versions(from_version, to_version)
+    typer.echo(TemporalQueryHandler.format_diff(version_diff))
 
 
 if __name__ == "__main__":

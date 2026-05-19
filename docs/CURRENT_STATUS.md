@@ -1,26 +1,24 @@
 # Current Status
 
-Updated: 2026-05-16
+Updated: 2026-05-19
 
 ## Summary
 
-Knowledge Base Agent is in a working graph-aware MVP state with the first Phase 2 "Confident Graph" slice implemented. The codebase supports both the original layered KB pipeline and the newer graph-aware pipeline. The graph-aware path is the preferred path for new snapshots because it produces a symbol graph, materialized retrieval views, feature overlays, and graph-aware retrieval context.
+Knowledge Base Agent has completed Phase 3 "Intelligent Retrieval". All five Phase 3 features are implemented: hot-path prioritization, graph-aware embeddings, temporal graph, advanced context composition (causal chain detection), and cross-language bridging.
 
 ## Verified Health
 
 ```text
 pytest -q
-193 passed, 3 dependency warnings
+257 passed, 3 dependency warnings
 ```
 
-The warnings are SWIG/native dependency deprecation warnings surfaced during analyzer tests; they are not Phase 2 logic failures.
-
-The working tree currently contains uncommitted Phase 2 implementation updates.
+The warnings are SWIG/native dependency deprecation warnings; not project logic failures.
 
 ## Recommended Snapshot Command
 
 ```bash
-python -m scripts.cli analyze --repo . --out .kb --skip-ai --with-graph --depth 2
+python -m scripts.cli analyze --repo . --out .kb --skip-ai --with-graph --depth 2 --detect-bridges
 python -m scripts.cli validate --kb .kb
 ```
 
@@ -37,66 +35,84 @@ Expected graph files:
 - `.kb/graph/nodes.jsonl`
 - `.kb/graph/edges.jsonl`
 - `.kb/graph/adjacency.json`
-- `.kb/graph/features.jsonl` when deterministic feature clusters are found
-
-Latest documented rebuilt snapshot:
-
-- Total entries: 521
-- Layers: `arch: 1`, `mod: 24`, `file: 50`, `mem: 446`
-- Index files: `.kb/index/faiss.index`, `.kb/index/id_map.json`
-- Validation: 100% consistency, no orphan entries
-- Graph-aware query smoke test: `RetrievalEngine` returns primary results, related nodes, 2-hop context, and relationship edges
-
-Note: the stats above predate the Phase 2 feature layer changes. Rebuild `.kb/` before treating snapshot counts as current.
+- `.kb/graph/features.jsonl`
+- `.kb/graph/hotpath.json`
+- `.kb/graph/versions/<version_id>/` (temporal snapshots)
 
 ## Canonical Runtime Model
 
 ```text
 Parser output
-  -> Symbol graph
+  -> Symbol graph (+ cross-language bridges)
   -> Materialized KB views + deterministic feature overlay
-  -> FAISS index
-  -> Intent-planned graph-aware retrieval
+  -> Hot-path scoring
+  -> Graph-aware FAISS index
+  -> Intent-planned graph-aware retrieval (+ causal chains)
+  -> Temporal versioned snapshots
 ```
 
 The symbol graph is the source of truth. KB entries are cached views designed for agent retrieval.
 
-## Known Gaps
+## Phase 3 Features
 
-- `.kb/` is generated and ignored by Git.
-- `Knowledge/Knowlegle_Base_agent/` is tracked but comes from a different snapshot toolchain.
-- The KB writer does not prune stale entry files, so clean graph snapshots should remove `.kb/` before rebuild.
-- Most docs are now aligned with graph-aware MVP status, but the long roadmap remains intentionally broad and should be treated as strategy, not an exact implementation tracker.
+### Hot-Path Prioritization
 
-## Retrieval Benchmark Baseline
+- Nodes ranked by incoming CALLS edge count, normalized to 0.0–1.0 hotness.
+- Hot-path scores persisted to `hotpath.json`.
+- Context composition sorts nodes within tiers by hotness descending.
+- Deterministic, no LLM needed.
 
-Phase 2 has deterministic retrieval benchmark coverage in `tests/test_retrieval_benchmarks.py`.
+### Graph-Aware Embeddings
 
-Current gold query coverage:
+- MEM entry embedding text enriched with: calls made, callers, feature membership, hotness score.
+- Non-MEM entries keep plain text embeddings.
+- Falls back gracefully when graph data is unavailable.
+- Activated via `--with-graph` on `index` command, or automatically in `analyze --with-graph`.
 
-- `symbol_lookup`: `What does RetrievalEngine do?`
-- `flow_trace`: `How does graph retrieval work?`
-- `module_overview`: `overview of query module`
-- `relationship`: `Who calls compose_context?`
+### Temporal Graph
 
-The benchmark mocks semantic seed search and verifies graph-aware retrieval behavior after seeds are selected: intent classification, entry-to-node mapping, graph expansion, context composition, and relationship output.
+- Versioned snapshots saved to `.kb/graph/versions/<version_id>/`.
+- Auto-detects git commit hash for version labels.
+- `versions` CLI command lists stored versions.
+- `diff` CLI command shows node/edge diffs between versions.
+- `VERSION_DIFF` query intent for temporal queries.
 
-## Phase 2 Progress
+### Advanced Context Composition
 
-Phase 2 implementation now includes:
+- `CHAIN_TRACE` intent for causal chain queries ("call chain from X to Y").
+- `CausalChainDetector` walks CALLS edges to produce ordered execution chains.
+- Chains sorted by (length desc, hotness desc).
+- ExpandedSubgraph now supports up to 4 hops for chain tracing.
+- New "chain" token budget tier in context composition.
 
-- Python import alias metadata is captured in `ImportInfo.aliases`.
-- GraphBuilder resolves aliased calls such as `from src.utils import helper as h; h()` into `aliased_import` call edges.
-- `aliased_import` is now treated as a resolved heuristic edge with confidence `0.70`.
-- Parser-level assignment extraction captures simple receiver assignments such as `svc = get_service()`.
-- GraphBuilder resolves type-inferred receiver calls such as `svc.login()` when the assigned factory function has a return type that maps to a known class.
-- Inherited `self.method()` calls resolve through base-class chains with `inherited_scope` confidence.
-- Decorators are normalized, including `@inject` and qualified forms such as `@container.inject()`, so dependency-injected targets get confidence capped.
-- Node confidence is propagated from high-confidence incoming edges.
-- Query-time edge confidence decays by graph hop using the farthest endpoint, including incoming relationship traversal.
-- Deterministic feature clusters are extracted from shared nouns and graph density, persisted to `features.jsonl`, and materialized as `feature` KB entries.
-- QueryPlanner selects expansion strategy by intent: symbol lookup, flow trace, module overview, relationship, and default.
+### Cross-Language Bridging
+
+- Abstract `LanguageBridge` base class with three strategies:
+  - `HttpApiBridge`: C# `[HttpGet]` routes matched against Python `requests.get()` URLs.
+  - `DataContractBridge`: Shared DTO class names between languages, boosted by field similarity.
+  - `MessageQueueBridge`: Shared topic/channel names in node names/docstrings.
+- `BridgeDetector` orchestrates strategies with deduplication.
+- New `BRIDGES_TO` edge kind (confidence 0.30–0.75).
+- `bridge_metadata` field on SymbolEdge stores protocol and route info.
+- Activated via `--detect-bridges` flag on `analyze` command.
+
+## New CLI Commands & Flags
+
+| Command/Flag | Purpose |
+|---|---|
+| `analyze --detect-bridges` | Enable cross-language bridge detection |
+| `analyze --version-id <label>` | Label for temporal snapshot |
+| `index --with-graph` | Enrich embeddings with graph context |
+| `versions` | List stored graph versions |
+| `diff --from <v1> --to <v2>` | Diff between graph versions |
+
+## New Enums
+
+| Type | New Values |
+|---|---|
+| EdgeKind | `BRIDGES_TO` (total: 7) |
+| QueryIntent | `CHAIN_TRACE`, `VERSION_DIFF` (total: 7) |
 
 ## Next Best Action
 
-Rebuild a clean `.kb/` graph snapshot, validate it, and update snapshot stats after the Phase 2 feature layer is materialized.
+Rebuild a clean `.kb/` graph snapshot with all Phase 3 features enabled, validate it, and update snapshot stats.

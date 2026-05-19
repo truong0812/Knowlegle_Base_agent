@@ -5,7 +5,7 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from kb_agent.graph.confidence import ConfidencePropagator
-from kb_agent.models.graph import SymbolEdge, SymbolNode
+from kb_agent.models.graph import EdgeKind, SymbolEdge, SymbolNode
 from kb_agent.views.base import ViewIDMapper
 
 MAX_HOPS = 2
@@ -20,11 +20,12 @@ class ExpandedSubgraph:
     hop1_nodes: list[SymbolNode]
     hop2_nodes: list[SymbolNode]
     hop3_nodes: list[SymbolNode] = field(default_factory=list)
+    hop4_nodes: list[SymbolNode] = field(default_factory=list)
     relevant_edges: list[SymbolEdge] = field(default_factory=list)
 
     @property
     def all_nodes(self) -> list[SymbolNode]:
-        return self.seed_nodes + self.hop1_nodes + self.hop2_nodes + self.hop3_nodes
+        return self.seed_nodes + self.hop1_nodes + self.hop2_nodes + self.hop3_nodes + self.hop4_nodes
 
 
 def expand_from_seeds(
@@ -115,6 +116,7 @@ def expand_from_seeds(
         hop1_nodes=[n for nid, n in included.items() if hop_of[nid] == 1],
         hop2_nodes=[n for nid, n in included.items() if hop_of[nid] == 2],
         hop3_nodes=[n for nid, n in included.items() if hop_of[nid] == 3],
+        hop4_nodes=[n for nid, n in included.items() if hop_of[nid] == 4],
         relevant_edges=decayed_edges,
     )
 
@@ -132,7 +134,9 @@ def _filter_edges(
         if edge.confidence < min_confidence:
             continue
         if strategy is not None and edge.kind not in strategy.follow_edge_kinds:
-            continue
+            # Always allow BRIDGES_TO edges through regardless of strategy filter
+            if edge.kind != EdgeKind.BRIDGES_TO:
+                continue
         if _is_utility_node(edge.source, mapper):
             continue
         if _is_utility_node(edge.target, mapper):
