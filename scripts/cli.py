@@ -71,6 +71,7 @@ def analyze(
     model: str = typer.Option("gpt-4o", help="LLM model name"),
     version_id: str = typer.Option(None, help="Version label for temporal snapshot"),
     detect_bridges: bool = typer.Option(False, help="Detect cross-language bridges"),
+    federated: bool = typer.Option(False, help="Enable cross-repo federation"),
 ) -> None:
     """Run full 3-layer analysis pipeline (scan → parse → analyze)."""
     from kb_agent.analyzer.llm import LLMClient
@@ -84,6 +85,7 @@ def analyze(
         repo_root=repo, out_dir=out, llm_client=llm_client,
         build_graph=with_graph, module_depth=depth,
         version_id=version_id, detect_bridges=detect_bridges,
+        federated=federated,
     )
     manifest = asyncio.run(pipeline.run())
 
@@ -214,6 +216,219 @@ def diff(
     handler = TemporalQueryHandler(kb / "graph")
     version_diff = handler.diff_versions(from_version, to_version)
     typer.echo(TemporalQueryHandler.format_diff(version_diff))
+
+
+@app.command()
+def ingest_telemetry(
+    traces_file: Path = typer.Argument(help="JSON file with trace spans"),
+    kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
+) -> None:
+    """Ingest OpenTelemetry traces and map to symbol graph nodes."""
+    import json as json_mod
+    from kb_agent.graph.storage import GraphStorage
+    from kb_agent.graph.telemetry import TelemetryIngestor, TelemetryStorage
+    from kb_agent.models.telemetry import TraceSpan
+
+    kb = kb.resolve()
+    graph_dir = kb / "graph"
+    if not graph_dir.exists():
+        typer.echo("Error: No graph found. Run `analyze --with-graph` first.", err=True)
+        raise typer.Exit(1)
+
+    traces_data = json_mod.loads(traces_file.read_text(encoding="utf-8"))
+    if isinstance(traces_data, dict):
+        traces_data = traces_data.get("spans", [traces_data])
+    spans = [TraceSpan(**s) for s in traces_data]
+
+    nodes, edges = GraphStorage(graph_dir).load()
+    ingestor = TelemetryIngestor(nodes, edges)
+    mapped = ingestor.ingest_traces(spans)
+
+    tel_storage = TelemetryStorage(kb / "telemetry")
+    tel_storage.save_traces(mapped)
+
+    mapped_count = sum(1 for s in mapped if s.mapped_node_id)
+    typer.echo(f"Ingested {len(spans)} spans, mapped {mapped_count} to graph nodes")
+
+
+@app.command()
+def update_runtime_metadata(
+    kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
+) -> None:
+    """Re-compute runtime metadata from ingested traces."""
+    from kb_agent.graph.telemetry import TelemetryIngestor, TelemetryStorage
+
+    kb = kb.resolve()
+    tel_storage = TelemetryStorage(kb / "telemetry")
+    spans = tel_storage.load_traces()
+    if not spans:
+        typer.echo("No traces found. Run `ingest-telemetry` first.")
+        raise typer.Exit(1)
+
+    from kb_agent.graph.storage import GraphStorage
+    nodes, edges = GraphStorage(kb / "graph").load()
+    ingestor = TelemetryIngestor(nodes, edges)
+    metadata = ingestor.compute_runtime_metadata(spans)
+    tel_storage.save_runtime_metadata(metadata)
+    typer.echo(f"Updated runtime metadata for {len(metadata)} nodes")
+
+
+@app.command()
+def train_ranking_model(
+    kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
+    min_samples: int = typer.Option(20, help="Minimum feedback samples required"),
+) -> None:
+    """Train retrieval ranking model from collected feedback."""
+    from kb_agent.graph.telemetry import TelemetryStorage
+    from kb_agent.query.self_tuning import SelfTuningRetrieval
+
+    kb = kb.resolve()
+    tel_storage = TelemetryStorage(kb / "telemetry")
+    tuner = SelfTuningRetrieval(tel_storage, kb / "graph")
+    config = tuner.train_ranking_model(min_samples=min_samples)
+    if config is None:
+        typer.echo("Insufficient feedback data for training.")
+        raise typer.Exit(1)
+    tel_storage.save_tuning_config(config)
+    typer.echo(f"Model trained: accuracy={config.accuracy:.2%}, samples={config.sample_count}")
+
+
+@app.command()
+def auto_tune(
+    kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
+) -> None:
+    """Auto-tune retrieval parameters from trained model."""
+    from kb_agent.graph.telemetry import TelemetryStorage
+    from kb_agent.query.self_tuning import SelfTuningRetrieval
+
+    kb = kb.resolve()
+    tel_storage = TelemetryStorage(kb / "telemetry")
+    config = tel_storage.load_tuning_config()
+    if config is None:
+        typer.echo("No tuning config found. Run `train-ranking-model` first.")
+        raise typer.Exit(1)
+
+    tuner = SelfTuningRetrieval(tel_storage, kb / "graph")
+    tuner.auto_tune_parameters(config)
+    typer.echo("Auto-tuning applied.")
+
+
+@app.command()
+def show_tuning_stats(
+    kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
+) -> None:
+    """Show self-tuning statistics and active overrides."""
+    from kb_agent.graph.telemetry import TelemetryStorage
+    from kb_agent.query.self_tuning import SelfTuningRetrieval
+
+    kb = kb.resolve()
+    tel_storage = TelemetryStorage(kb / "telemetry")
+    tuner = SelfTuningRetrieval(tel_storage, kb / "graph")
+    stats = tuner.get_tuning_stats()
+    typer.echo(f"Feedback total: {stats['feedback_total']}")
+    typer.echo(f"Useful rate: {stats['useful_rate']:.1%}")
+    typer.echo(f"Last accuracy: {stats['accuracy']:.1%}")
+    if stats['active_overrides']:
+        typer.echo(f"Active overrides: {stats['active_overrides']}")
+
+
+@app.command()
+def add_repo(
+    repo_path: str = typer.Argument(help="Path to the other repo's .kb directory"),
+    name: str = typer.Option(None, help="Human-readable name for the repo"),
+    kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
+) -> None:
+    """Register an external repository for cross-repo symbol resolution."""
+    from kb_agent.graph.federation import FederatedGraphManager
+
+    kb = kb.resolve()
+    fed = FederatedGraphManager(kb)
+    ref = fed.add_repository(repo_path, repo_name=name)
+    typer.echo(f"Registered repository: {ref.repo_name} ({ref.node_count} nodes, {ref.edge_count} edges)")
+
+
+@app.command()
+def resolve_cross_repo(
+    kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
+) -> None:
+    """Resolve cross-repository symbol references and persist to graph."""
+    from kb_agent.graph.federation import FederatedGraphManager
+    from kb_agent.graph.storage import GraphStorage
+
+    kb = kb.resolve()
+    graph_dir = kb / "graph"
+    storage = GraphStorage(graph_dir)
+    nodes, edges = storage.load()
+
+    fed = FederatedGraphManager(kb)
+    result = fed.resolve_cross_repo_symbols(nodes, edges)
+
+    if result.edges:
+        # Add foreign nodes so retrieval expander can traverse REFERENCES_REPO edges
+        all_nodes = nodes + result.foreign_nodes
+        all_edges = edges + result.edges
+        storage.save(all_nodes, all_edges)
+        typer.echo(
+            f"Resolved {len(result.edges)} cross-repo references, "
+            f"imported {len(result.foreign_nodes)} foreign nodes"
+        )
+    else:
+        typer.echo("Found 0 cross-repo references")
+
+
+@app.command()
+def update_shared_deps(
+    kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
+) -> None:
+    """Update shared dependency references across registered repos."""
+    from kb_agent.graph.federation import FederatedGraphManager
+
+    kb = kb.resolve()
+    fed = FederatedGraphManager(kb)
+    refs = fed.update_shared_deps()
+    typer.echo(f"Updated {len(refs)} shared dependency references")
+
+
+@app.command()
+def dashboard(
+    kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
+) -> None:
+    """Show observability dashboard with graph health and retrieval analytics."""
+    from kb_agent.analyzer.dashboard import DashboardAnalyzer
+
+    kb = kb.resolve()
+    analyzer = DashboardAnalyzer(kb)
+    health = analyzer.graph_health()
+    analytics = analyzer.retrieval_analytics()
+    typer.echo(DashboardAnalyzer.format_health(health))
+    typer.echo()
+    typer.echo(DashboardAnalyzer.format_analytics(analytics))
+
+
+@app.command()
+def graph_health(
+    kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
+) -> None:
+    """Show graph health metrics."""
+    from kb_agent.analyzer.dashboard import DashboardAnalyzer
+
+    kb = kb.resolve()
+    analyzer = DashboardAnalyzer(kb)
+    health = analyzer.graph_health()
+    typer.echo(DashboardAnalyzer.format_health(health))
+
+
+@app.command()
+def query_analytics(
+    kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
+) -> None:
+    """Show retrieval analytics."""
+    from kb_agent.analyzer.dashboard import DashboardAnalyzer
+
+    kb = kb.resolve()
+    analyzer = DashboardAnalyzer(kb)
+    analytics = analyzer.retrieval_analytics()
+    typer.echo(DashboardAnalyzer.format_analytics(analytics))
 
 
 if __name__ == "__main__":
