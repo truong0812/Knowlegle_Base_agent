@@ -6,6 +6,7 @@ from pathlib import Path
 
 from kb_agent.graph.hotpath import HotPathScore
 from kb_agent.graph.storage import GraphStorage
+from kb_agent.models.telemetry import RuntimeMetadata, TuningConfig
 from kb_agent.query.composer import RetrievalMetrics, RetrievalResult, compose_context
 from kb_agent.query.expander import expand_from_seeds
 from kb_agent.query.intent import QueryIntent, classify_intent
@@ -29,12 +30,18 @@ class RetrievalEngine:
         kb_dir: Path,
         model_name: str = "all-MiniLM-L6-v2",
         top_k: int = 5,
+        tuning_config: "TuningConfig | None" = None,
     ) -> None:
         self._kb_dir = kb_dir.resolve()
         self._query_engine = QueryEngine(kb_dir, model_name=model_name)
         self._top_k = top_k
         self._mapper: ViewIDMapper | None = None
         self._hotpath: dict[str, HotPathScore] | None = None
+        self._runtime_meta: dict[str, RuntimeMetadata] | None = None
+        # Auto-load tuning config from .kb/telemetry/ when not explicitly provided
+        if tuning_config is None:
+            tuning_config = self._load_tuning_config()
+        self._tuning_config = tuning_config
 
     def retrieve(self, question: str, top_k: int | None = None) -> RetrievalResult:
         """Run full retrieval pipeline."""
@@ -62,12 +69,21 @@ class RetrievalEngine:
             return self._entry_only_result(question, intent, seed_entries)
 
         mapper = self._get_mapper(graph_dir)
-        planner = QueryPlanner()
+        planner = QueryPlanner(tuning_config=self._tuning_config)
         strategy = planner.plan(intent)
         subgraph = expand_from_seeds(mapping.seed_nodes, mapper, strategy=strategy)
 
         hotpath_scores = self._load_hotpath(graph_dir)
         hot_map = {nid: s.hotness for nid, s in hotpath_scores.items()} if hotpath_scores else None
+
+        # Blend runtime metadata into hotness scores
+        runtime_meta = self._load_runtime_metadata(graph_dir)
+        if runtime_meta and hot_map:
+            max_calls = max(m.call_count for m in runtime_meta.values()) if runtime_meta else 0
+            for nid, meta in runtime_meta.items():
+                if nid in hot_map and max_calls > 0:
+                    runtime_weight = (meta.call_count / max_calls) * (1.0 - meta.error_rate)
+                    hot_map[nid] = hot_map[nid] * 0.6 + round(runtime_weight, 4) * 0.4
 
         # Chain detection for CHAIN_TRACE intent
         chains = None
@@ -102,6 +118,26 @@ class RetrievalEngine:
         if self._hotpath is None:
             self._hotpath = GraphStorage(graph_dir).load_hotpath()
         return self._hotpath
+
+    def _load_runtime_metadata(self, graph_dir: Path) -> dict[str, RuntimeMetadata]:
+        if self._runtime_meta is None:
+            from kb_agent.graph.telemetry import TelemetryStorage
+            tel_dir = graph_dir.parent / "telemetry"
+            if tel_dir.exists():
+                storage = TelemetryStorage(tel_dir)
+                self._runtime_meta = storage.load_runtime_metadata()
+            else:
+                self._runtime_meta = {}
+        return self._runtime_meta
+
+    def _load_tuning_config(self) -> TuningConfig | None:
+        """Auto-load tuning config from .kb/telemetry/ if available."""
+        from kb_agent.graph.telemetry import TelemetryStorage
+        tel_dir = self._kb_dir / "telemetry"
+        if not tel_dir.exists():
+            return None
+        storage = TelemetryStorage(tel_dir)
+        return storage.load_tuning_config()
 
     def _entry_only_result(
         self,

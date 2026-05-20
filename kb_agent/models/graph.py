@@ -15,6 +15,7 @@ class EdgeKind(str, Enum):
     CONTAINS = "contains"
     USES_TYPE = "uses_type"
     BRIDGES_TO = "bridges_to"
+    REFERENCES_REPO = "references_repo"
 
 
 class SymbolNode(BaseModel):

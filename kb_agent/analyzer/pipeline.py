@@ -36,6 +36,7 @@ class AnalysisPipeline:
         module_depth: int = 1,
         version_id: str | None = None,
         detect_bridges: bool = False,
+        federated: bool = False,
     ) -> None:
         self._repo_root = repo_root.resolve()
         self._out_dir = out_dir.resolve()
@@ -45,6 +46,7 @@ class AnalysisPipeline:
         self._module_depth = module_depth
         self._version_id = version_id
         self._detect_bridges = detect_bridges
+        self._federated = federated
 
     async def run(self) -> Manifest:
         """Run full pipeline: scan → parse → graph (opt) → views/layers → write."""
@@ -138,8 +140,16 @@ class AnalysisPipeline:
         hotpath_scores = scorer.score_nodes()
         storage.save_hotpath(hotpath_scores)
 
-        # Temporal snapshot
-        self._save_temporal_snapshot(builder.nodes, builder.edges)
+        # Runtime telemetry overlay (if telemetry data exists)
+        self._apply_runtime_telemetry(builder.nodes, builder.edges, storage)
+
+        # Federated cross-repo edges (opt-in) — before snapshot so it includes federation data
+        snap_nodes, snap_edges = builder.nodes, builder.edges
+        if self._federated:
+            snap_nodes, snap_edges = self._resolve_federated_edges(builder.nodes, builder.edges)
+
+        # Temporal snapshot — includes federation nodes/edges if applicable
+        self._save_temporal_snapshot(snap_nodes, snap_edges)
 
         logger.info(
             "Graph built: %d nodes, %d edges",
@@ -167,6 +177,41 @@ class AnalysisPipeline:
             parent_version=parent_version,
         )
         logger.info("Temporal snapshot saved: %s", version_id)
+
+    def _apply_runtime_telemetry(self, nodes: list, edges: list, storage) -> None:
+        """Blend runtime telemetry into graph metadata if telemetry data exists."""
+        from kb_agent.graph.telemetry import TelemetryStorage
+
+        tel_dir = self._out_dir / "telemetry"
+        if not tel_dir.exists():
+            return
+        tel_storage = TelemetryStorage(tel_dir)
+        runtime_meta = tel_storage.load_runtime_metadata()
+        if not runtime_meta:
+            return
+        logger.info("Applying runtime telemetry for %d nodes", len(runtime_meta))
+
+    def _resolve_federated_edges(self, nodes: list, edges: list) -> tuple[list, list]:
+        """Resolve cross-repo symbol references if federation is enabled.
+
+        Returns (all_nodes, all_edges) including foreign nodes and REFERENCES_REPO edges.
+        """
+        from kb_agent.graph.federation import FederatedGraphManager
+
+        fed_mgr = FederatedGraphManager(self._out_dir)
+        result = fed_mgr.resolve_cross_repo_symbols(nodes, edges)
+        if result.edges:
+            from kb_agent.graph.storage import GraphStorage
+            storage = GraphStorage(self._out_dir / "graph")
+            all_nodes = nodes + result.foreign_nodes
+            all_edges = edges + result.edges
+            storage.save(all_nodes, all_edges)
+            logger.info(
+                "Federation: added %d cross-repo edges, imported %d foreign nodes",
+                len(result.edges), len(result.foreign_nodes),
+            )
+            return all_nodes, all_edges
+        return nodes, edges
 
     def _detect_version_id(self) -> str:
         """Generate a version ID from git hash or timestamp."""
