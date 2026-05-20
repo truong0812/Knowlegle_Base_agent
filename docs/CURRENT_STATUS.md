@@ -1,6 +1,6 @@
 # Current Status
 
-Updated: 2026-05-19
+Updated: 2026-05-20
 
 ## Summary
 
@@ -104,7 +104,45 @@ The symbol graph is the source of truth. KB entries are cached views designed fo
 | `analyze --version-id <label>` | Label for temporal snapshot |
 | `index --with-graph` | Enrich embeddings with graph context |
 | `versions` | List stored graph versions |
-| `diff --from <v1> --to <v2>` | Diff between graph versions |
+| `diff --from-version <v1> --to-version <v2>` | Diff between graph versions |
+| `ingest-telemetry <traces.json> --kb .kb` | Map OpenTelemetry spans to graph nodes |
+| `update-runtime-metadata --kb .kb` | Aggregate call counts, latency, and error rates from ingested traces |
+| `train-ranking-model --kb .kb --min-samples 20` | Train retrieval tuning config from feedback |
+| `auto-tune --kb .kb` | Apply saved tuning overrides to graph-aware retrieval |
+| `show-tuning-stats --kb .kb` | Show feedback count, useful rate, and active overrides |
+| `add-repo /path/to/other/.kb --name other --kb .kb` | Register another repository graph |
+| `resolve-cross-repo --kb .kb` | Persist cross-repo references and foreign nodes |
+| `update-shared-deps --kb .kb` | Refresh shared dependency references across registered repos |
+| `dashboard --kb .kb` | Show graph health and retrieval analytics together |
+| `graph-health --kb .kb` | Show graph-only health metrics |
+| `query-analytics --kb .kb` | Show retrieval feedback analytics |
+
+## Runtime/Federation Examples
+
+Prerequisites:
+
+- Run `analyze --with-graph` before telemetry, federation, or dashboard commands.
+- For federation, pass an external repository `.kb` directory that contains `graph/`.
+- Feedback for self-tuning is currently written by runtime or integration code into `.kb/telemetry/feedback.jsonl`; there is no CLI feedback collector yet.
+
+```bash
+python -m scripts.cli ingest-telemetry traces.json --kb .kb
+python -m scripts.cli update-runtime-metadata --kb .kb
+python -m scripts.cli train-ranking-model --kb .kb --min-samples 20
+python -m scripts.cli auto-tune --kb .kb
+python -m scripts.cli add-repo /path/to/other-project/.kb --name other-project --kb .kb
+python -m scripts.cli resolve-cross-repo --kb .kb
+python -m scripts.cli dashboard --kb .kb
+```
+
+Common fixes:
+
+| Message | Fix |
+|---|---|
+| `No graph found. Run analyze --with-graph first.` | Rebuild with `analyze --with-graph`. |
+| `No traces found. Run ingest-telemetry first.` | Run `ingest-telemetry` before `update-runtime-metadata`. |
+| `No tuning config found. Run train-ranking-model first.` | Write feedback to `.kb/telemetry/feedback.jsonl`, then run `train-ranking-model`. |
+| External repo is missing graph data | Point `add-repo` at a `.kb` directory with `graph/nodes.jsonl` and `graph/edges.jsonl`. |
 
 ## New Enums
 
