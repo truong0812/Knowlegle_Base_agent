@@ -17,6 +17,18 @@ python -m scripts.cli validate --kb .kb
 python -m scripts.cli query "Parser làm gì?" --kb .kb --with-graph
 ```
 
+Runtime telemetry, self-tuning, federation, and dashboard commands are optional layers on top of a graph snapshot:
+
+```bash
+python -m scripts.cli ingest-telemetry traces.json --kb .kb
+python -m scripts.cli update-runtime-metadata --kb .kb
+python -m scripts.cli train-ranking-model --kb .kb --min-samples 20
+python -m scripts.cli auto-tune --kb .kb
+python -m scripts.cli add-repo /path/to/other-project/.kb --name other-project --kb .kb
+python -m scripts.cli resolve-cross-repo --kb .kb
+python -m scripts.cli dashboard --kb .kb
+```
+
 Xem [Workflow Cho Nhiều Dự Án](#workflow-cho-nhiều-dự-án) để dùng tool với repository khác.
 
 ## Tư Tưởng Cốt Lõi
@@ -187,6 +199,7 @@ MVP hiện tại đã có nền móng đủ để chạy graph-aware snapshot:
 - FAISS semantic index
 - graph-aware retrieval
 - CLI cho `scan`, `parse`, `analyze`, `validate`, `index`, `query`
+- runtime telemetry ingestion, retrieval self-tuning, multi-repo federation, observability dashboard
 
 Các số liệu như test count và snapshot stats có thể thay đổi theo từng commit. Xem trạng thái gần nhất tại [docs/CURRENT_STATUS.md](docs/CURRENT_STATUS.md).
 
@@ -287,6 +300,103 @@ Graph-aware query:
 python -m scripts.cli query "AuthService được gọi bởi những gì?" --kb /path/to/project-a/.kb --with-graph
 ```
 
+### Phase 4 Prerequisites
+
+Telemetry, federation, and dashboard commands expect a graph-backed KB. Run `analyze --with-graph` first:
+
+```bash
+python -m scripts.cli analyze --repo /path/to/project-a --out /path/to/project-a/.kb --skip-ai --with-graph --depth 2
+```
+
+For federation, every external repository should also be analyzed with `--with-graph`, and `add-repo` should point at that repository's `.kb` directory containing `graph/`.
+
+### Runtime Telemetry
+
+Ingest OpenTelemetry-style trace spans after building a graph snapshot:
+
+```bash
+python -m scripts.cli analyze --repo /path/to/project-a --out /path/to/project-a/.kb --skip-ai --with-graph --depth 2
+python -m scripts.cli ingest-telemetry /path/to/traces.json --kb /path/to/project-a/.kb
+python -m scripts.cli update-runtime-metadata --kb /path/to/project-a/.kb
+```
+
+`traces.json` can be a list of spans, a single span object, or an object with a `spans` array:
+
+```json
+{
+  "spans": [
+    {
+      "trace_id": "trace-1",
+      "span_id": "span-1",
+      "operation_name": "handle_request",
+      "start_time": "2026-01-01T00:00:00",
+      "end_time": "2026-01-01T00:00:00.125",
+      "status_code": "OK",
+      "attributes": {
+        "code.filepath": "app/server.py",
+        "code.function": "handle_request"
+      }
+    }
+  ]
+}
+```
+
+`ingest-telemetry` maps spans to graph nodes and stores them under `.kb/telemetry/`. `update-runtime-metadata` aggregates call counts, latency, and error-rate metadata from the ingested spans.
+
+### Self-Tuning Retrieval
+
+Train from collected feedback, apply the learned retrieval overrides, and inspect the active tuning stats:
+
+```bash
+python -m scripts.cli train-ranking-model --kb /path/to/project-a/.kb --min-samples 20
+python -m scripts.cli auto-tune --kb /path/to/project-a/.kb
+python -m scripts.cli show-tuning-stats --kb /path/to/project-a/.kb
+```
+
+`auto-tune` expects a tuning config produced by `train-ranking-model`. Once saved, graph-aware retrieval loads `.kb/telemetry/tuning_config.json` automatically.
+
+Feedback collection is currently not exposed as a CLI command. Runtime or integration code should write feedback records into `.kb/telemetry/feedback.jsonl` before running `train-ranking-model`.
+
+### Multi-Repo Federation
+
+Register another repository's `.kb` directory, then resolve cross-repo references into the local graph:
+
+```bash
+python -m scripts.cli add-repo /path/to/project-b/.kb --name project-b --kb /path/to/project-a/.kb
+python -m scripts.cli resolve-cross-repo --kb /path/to/project-a/.kb
+python -m scripts.cli update-shared-deps --kb /path/to/project-a/.kb
+```
+
+Use this after each repository has been analyzed with `--with-graph`. `add-repo` records the external graph, while `resolve-cross-repo` persists namespaced foreign nodes and `REFERENCES_REPO` edges so graph-aware queries can traverse repository boundaries.
+
+### Dashboard
+
+Show graph health and retrieval analytics together:
+
+```bash
+python -m scripts.cli dashboard --kb /path/to/project-a/.kb
+```
+
+For narrower output, use the split commands:
+
+```bash
+python -m scripts.cli graph-health --kb /path/to/project-a/.kb
+python -m scripts.cli query-analytics --kb /path/to/project-a/.kb
+```
+
+Example output includes node/edge counts, confidence distribution, orphan-node ratio, bridge and cross-repo edge counts, feedback volume, and useful-feedback rate.
+
+### Troubleshooting
+
+Common Phase 4 CLI failures usually mean a prerequisite artifact is missing:
+
+| Message | Fix |
+|---|---|
+| `No graph found. Run analyze --with-graph first.` | Rebuild the KB with `python -m scripts.cli analyze --repo <repo> --out <repo>/.kb --skip-ai --with-graph --depth 2`. |
+| `No traces found. Run ingest-telemetry first.` | Ingest traces with `python -m scripts.cli ingest-telemetry traces.json --kb <repo>/.kb`. |
+| `No tuning config found. Run train-ranking-model first.` | Collect/write feedback to `.kb/telemetry/feedback.jsonl`, then run `train-ranking-model`. |
+| External repo cannot be registered or resolved | Pass the external repository's `.kb` directory, and make sure it contains `graph/nodes.jsonl` and `graph/edges.jsonl`. |
+
 ## Output
 
 ```text
@@ -299,6 +409,7 @@ python -m scripts.cli query "AuthService được gọi bởi những gì?" --kb
   index/                   # retrieval index
     faiss.index            # FAISS vector index
     id_map.json            # maps vector IDs to KB entry IDs
+  telemetry/               # optional runtime traces, feedback, tuning config
   manifest.json            # snapshot metadata
   quality_report.json      # validation results
 ```
