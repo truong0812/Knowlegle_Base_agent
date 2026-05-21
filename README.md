@@ -68,140 +68,24 @@ Knowledge Base Agent giải quyết bằng cách phân tích repository một l�
 - Thay đổi file này ảnh hưởng đến vùng nào?
 - Context nào là quan trọng nhất cho câu hỏi hiện tại?
 
-## Kiến Trúc Dài Hạn
+## Kiến Trúc Hệ Thống
 
-### 1. Language Adapter
+Knowledge Base Agent hoạt động theo pipeline: **Scanner → Parser → Symbol Graph → Materialized Views → FAISS Index → Retrieval Engine**.
 
-Hệ thống không giả vờ “language agnostic”. Mỗi ngôn ngữ nên có adapter riêng để tận dụng khả năng semantic tốt nhất:
-
-| Ngôn ngữ | Adapter dài hạn | Fallback hiện tại |
-|---|---|---|
-| C# | Roslyn | tree-sitter |
-| TypeScript | TypeScript Compiler API | tree-sitter trong tương lai |
-| Python | Python `ast` | tree-sitter |
-| C++ | clang tooling trong tương lai | tree-sitter |
-
-### 2. CIR: Common Intermediate Representation
-
-Mỗi adapter normalize dữ liệu về các schema chung, có version:
-
-```text
-cir.symbols.v1
-cir.calls.v1
-cir.dependencies.v1
-cir.architecture.v1
-```
-
-CIR nên chứa:
-
-- entities: package, module, file, class, method, function
-- calls
-- imports
-- inheritance
-- interface implementation
-- type usages
-- dependency relations
-- provenance
-- confidence
-- commit/time metadata
-
-### 3. Symbol Graph
-
-Symbol Graph là trung tâm của hệ thống. Nó lưu các node và edge deterministic nhất có thể:
-
-```text
-SymbolNode:
-  id
-  kind
-  language
-  path
-  line_start / line_end
-  signature
-  parameters
-  return_type
-  docstring
-
-SymbolEdge:
-  source
-  target
-  kind
-  confidence
-  source_type
-  resolution
-```
-
-Các edge quan trọng:
-
-- `contains`
-- `imports`
-- `calls`
-- `inherits`
-- `implements`
-- `uses_type`
-
-Rule quan trọng: thà thiếu edge còn hơn thêm edge sai. Edge có confidence thấp không nên được đưa vào graph mặc định.
-
-### 4. Knowledge Materialization
-
-Knowledge base không phải source of truth. Nó là lớp materialized views được sinh ra từ graph để phục vụ retrieval.
-
-Các view hiện tại:
-
-- `arch`: overview cấp repository
-- `mod`: overview cấp module/folder
-- `file`: overview cấp file
-- `mem`: overview cấp class/function/method
-
-Về lâu dài, materializer có thể sinh thêm:
-
-- Markdown docs
-- JSON/YAML context bundles
-- Mermaid diagrams
-- embeddings
-- MCP payloads
-- agent-specific context packs
-
-### 5. Retrieval-Centric Design
-
-Embeddings chỉ là một phần của retrieval, không phải toàn bộ retrieval.
-
-Flow mong muốn:
-
-```text
-Query
-  -> intent detection
-  -> semantic seed search
-  -> graph expansion
-  -> architecture filtering
-  -> dependency weighting
-  -> confidence-aware ranking
-  -> context composition
-```
-
-Context builder là thành phần khó nhất. Nó phải cân bằng:
-
-- semantic relevance
-- graph distance
-- edge confidence
-- architectural boundary
-- token budget
-- hot path/runtime importance trong tương lai
+Symbol Graph là trung tâm — source of truth duy nhất. Mọi thứ khác (KB entries, embeddings, context) là materialized views sinh ra từ graph. Chi tiết kiến trúc, design rationale, và hướng dài hạn tại [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Trạng Thái Hiện Tại
 
-MVP hiện tại đã có nền móng đủ để chạy graph-aware snapshot:
+Hệ thống 4 phase đã hoàn thành đầy đủ (314 tests passing):
 
-- scanner cho Python, C#, C++
-- parser dựa trên tree-sitter, Python có AST fallback
-- legacy layered analysis: `arch`, `mod`, `mem`
-- symbol graph
-- graph-derived materialized views: `arch`, `mod`, `file`, `mem`
-- FAISS semantic index
-- graph-aware retrieval
-- CLI cho `scan`, `parse`, `analyze`, `validate`, `index`, `query`
-- runtime telemetry ingestion, retrieval self-tuning, multi-repo federation, observability dashboard
+- Scanner/parser cho Python, C#, C++
+- Symbol graph với graduated confidence
+- 4 materialized views: `arch`, `mod`, `file`, `mem`
+- Graph-aware retrieval với intent planning
+- Cross-language bridging, temporal graph, hot-path
+- Runtime telemetry, self-tuning retrieval, multi-repo federation, dashboard
 
-Các số liệu như test count và snapshot stats có thể thay đổi theo từng commit. Xem trạng thái gần nhất tại [docs/CURRENT_STATUS.md](docs/CURRENT_STATUS.md).
+Lịch sử chi tiết từng phase tại [docs/CHANGELOG.md](docs/CHANGELOG.md).
 
 ## Cài Đặt
 
@@ -418,45 +302,12 @@ Common Phase 4 CLI failures usually mean a prerequisite artifact is missing:
 
 ## Roadmap
 
-### Phase 1: Graph-Aware MVP
-
-Đã hoàn thành ở mức nền tảng:
-
-- scanner/parser
-- symbol graph
-- materialized views
-- semantic index
-- graph-aware retrieval
-
-### Phase 2: Confident Graph
-
-Mục tiêu là tăng độ tin cậy của graph và retrieval:
-
-- enhanced symbol resolution
-- alias/import resolution tốt hơn
-- confidence propagation
-- deterministic feature overlay
-- benchmark queries cho retrieval precision
-
-### Phase 3: Intelligent Retrieval
-
-Mục tiêu là retrieval hiểu được flow lớn hơn:
-
-- cross-language bridging
-- graph-aware embeddings
-- temporal graph
-- advanced context composition
-- hot-path prioritization
-
-### Phase 4: Production Intelligence
-
-Mục tiêu là đưa runtime và vận hành vào graph:
-
-- OpenTelemetry/runtime traces
-- latency/error/call-frequency metadata
-- multi-repo graph
-- retrieval observability
-- self-tuning ranking
+| Phase | Tên | Trạng thái | Tóm tắt |
+|-------|-----|-----------|---------|
+| Phase 1 | Graph-Aware MVP | **Đã hoàn thành** | Scanner, parser, symbol graph, materialized views, graph-aware retrieval |
+| Phase 2 | Confident Graph | **Đã hoàn thành** | Enhanced resolution, confidence propagation, feature overlay, query planner |
+| Phase 3 | Intelligent Retrieval | **Đã hoàn thành** | Cross-language bridging, temporal graph, hot-path, graph-aware embeddings |
+| Phase 4 | Production Intelligence | **Đã hoàn thành** | Runtime telemetry, self-tuning retrieval, multi-repo federation, dashboard |
 
 ## Nguyên Tắc Phát Triển
 
