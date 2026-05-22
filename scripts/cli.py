@@ -6,10 +6,14 @@ Converts codebase into structured knowledge base (JSON entries + FAISS index).
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
 import typer
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = typer.Typer(help="Knowledge Base Agent — codebase → structured KB")
 
@@ -68,7 +72,7 @@ def analyze(
     skip_ai: bool = typer.Option(False, help="Skip LLM analysis (static only)"),
     with_graph: bool = typer.Option(False, help="Build symbol graph with edge resolution"),
     depth: int = typer.Option(1, help="Module grouping depth (1=src/, 2=src/services/)"),
-    model: str = typer.Option("gpt-4o", help="LLM model name"),
+    model: str = typer.Option(None, help="LLM model name (default: OPENAI_MODEL env or gpt-4o)"),
     version_id: str = typer.Option(None, help="Version label for temporal snapshot"),
     detect_bridges: bool = typer.Option(False, help="Detect cross-language bridges"),
     federated: bool = typer.Option(False, help="Enable cross-repo federation"),
@@ -80,7 +84,15 @@ def analyze(
     repo = repo.resolve()
     out = out.resolve()
 
-    llm_client = None if skip_ai else LLMClient(model=model, cache_dir=out / ".cache")
+    llm_client = None
+    if not skip_ai:
+        resolved_model = model or os.getenv("OPENAI_MODEL", "gpt-4o")
+        llm_client = LLMClient(
+            model=resolved_model,
+            cache_dir=out / ".cache",
+            api_key=os.getenv("OPENAI_API_KEY"),
+            base_url=os.getenv("OPENAI_BASE_URL"),
+        )
     pipeline = AnalysisPipeline(
         repo_root=repo, out_dir=out, llm_client=llm_client,
         build_graph=with_graph, module_depth=depth,

@@ -27,7 +27,12 @@ class TestLLMClient:
     def test_uses_async_client(self):
         with patch("kb_agent.analyzer.llm.AsyncOpenAI") as mock_cls:
             LLMClient(model="gpt-4o", api_key="test-key")
-            mock_cls.assert_called_once_with(api_key="test-key")
+            mock_cls.assert_called_once_with(api_key="test-key", base_url=None)
+
+    def test_uses_custom_base_url(self):
+        with patch("kb_agent.analyzer.llm.AsyncOpenAI") as mock_cls:
+            LLMClient(model="gpt-4o", api_key="test-key", base_url="http://localhost:11434/v1")
+            mock_cls.assert_called_once_with(api_key="test-key", base_url="http://localhost:11434/v1")
 
     def test_cache_hit(self, cache_dir: Path):
         client = _make_client(cache_dir=cache_dir)
