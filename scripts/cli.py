@@ -76,6 +76,7 @@ def analyze(
     version_id: str = typer.Option(None, help="Version label for temporal snapshot"),
     detect_bridges: bool = typer.Option(False, help="Detect cross-language bridges"),
     federated: bool = typer.Option(False, help="Enable cross-repo federation"),
+    skip_mem_ai: bool = typer.Option(False, help="Skip LLM enrichment for member-level entries"),
 ) -> None:
     """Run full 3-layer analysis pipeline (scan → parse → analyze)."""
     from kb_agent.analyzer.llm import LLMClient
@@ -97,7 +98,7 @@ def analyze(
         repo_root=repo, out_dir=out, llm_client=llm_client,
         build_graph=with_graph, module_depth=depth,
         version_id=version_id, detect_bridges=detect_bridges,
-        federated=federated,
+        federated=federated, skip_mem_ai=skip_mem_ai,
     )
     manifest = asyncio.run(pipeline.run())
 
@@ -402,19 +403,87 @@ def update_shared_deps(
 
 
 @app.command()
-def dashboard(
+def serve(
     kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
+    watch: bool = typer.Option(False, help="Enable file watcher for auto-sync"),
 ) -> None:
-    """Show observability dashboard with graph health and retrieval analytics."""
-    from kb_agent.analyzer.dashboard import DashboardAnalyzer
+    """Start MCP server exposing KB as tools for AI coding agents."""
+    from kb_agent.mcp_server.auto_init import ensure_kb_initialized
+    from kb_agent.mcp_server.server import run_server
 
     kb = kb.resolve()
-    analyzer = DashboardAnalyzer(kb)
-    health = analyzer.graph_health()
-    analytics = analyzer.retrieval_analytics()
-    typer.echo(DashboardAnalyzer.format_health(health))
-    typer.echo()
-    typer.echo(DashboardAnalyzer.format_analytics(analytics))
+
+    if not ensure_kb_initialized(kb):
+        typer.echo("No source files found. Run `analyze` first.", err=True)
+        raise typer.Exit(1)
+
+    if watch:
+        from kb_agent.mcp_server.watcher import KBFileHandler
+        handler = KBFileHandler(kb, kb.parent)
+        handler.start()
+        typer.echo("Auto-sync enabled", err=True)
+
+    typer.echo(f"Starting KB Agent MCP server ({kb})", err=True)
+    run_server(kb)
+
+
+@app.command()
+def enrich(
+    kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
+    retry_failed: bool = typer.Option(False, help="Also retry previously failed entries"),
+    model: str = typer.Option(None, help="LLM model name"),
+    batch_size: int = typer.Option(5, help="Number of entries per batch"),
+) -> None:
+    """Incrementally enrich KB entries with LLM data (only entries missing AI data)."""
+    from kb_agent.analyzer.enricher import Enricher
+    from kb_agent.analyzer.llm import LLMClient
+
+    kb = kb.resolve()
+    if not kb.exists():
+        typer.echo(f"Error: {kb} not found. Run `analyze` first.", err=True)
+        raise typer.Exit(1)
+
+    resolved_model = model or os.getenv("OPENAI_MODEL", "gpt-4o")
+    llm_client = LLMClient(
+        model=resolved_model,
+        cache_dir=kb / ".cache",
+        api_key=os.getenv("OPENAI_API_KEY"),
+        base_url=os.getenv("OPENAI_BASE_URL"),
+        chunk_size=batch_size,
+    )
+    enricher = Enricher(kb, llm_client)
+    stats = asyncio.run(enricher.enrich(retry_failed=retry_failed))
+
+    typer.echo(f"Enrichment complete:")
+    typer.echo(f"  Total entries: {stats['total']}")
+    typer.echo(f"  Enriched: {stats['enriched']}")
+    typer.echo(f"  Skipped (already enriched): {stats['skipped']}")
+    typer.echo(f"  Failed: {stats['failed']}")
+
+
+@app.command()
+def dashboard(
+    kb: Path = typer.Option(Path(".kb"), help="Knowledge base directory"),
+    port: int = typer.Option(8080, help="Dashboard port"),
+    no_browser: bool = typer.Option(False, help="Don't open browser automatically"),
+) -> None:
+    """Launch interactive graph dashboard in browser."""
+    import uvicorn
+
+    kb = kb.resolve()
+    if not kb.exists():
+        typer.echo(f"Error: {kb} not found. Run `analyze` first.", err=True)
+        raise typer.Exit(1)
+
+    from kb_agent.dashboard.server import create_app
+    app = create_app(kb)
+
+    if not no_browser:
+        import webbrowser
+        webbrowser.open(f"http://localhost:{port}")
+
+    typer.echo(f"Dashboard running at http://localhost:{port}")
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 
 @app.command()
