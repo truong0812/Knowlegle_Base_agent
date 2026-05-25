@@ -1,72 +1,62 @@
 # Knowledge Base Agent — Các Vấn Đề Cần Cải Thiện
 
-Updated: 2026-05-22
+Updated: 2026-05-25
 
-## 1. LLM Batch Processing & Rate Limiting
+> Tất cả 5 issues dưới đây đã được giải quyết trong Phase 5 (commit `5bb5f9d`).
 
-**Vấn đề:** Khi chạy AI enrichment cho repository lớn (887+ MEM entries), NVIDIA API trả 429 Too Many Requests liên tục. Pipeline hiện tại gửi requests song song qua `asyncio.gather` với semaphore=5, nhưng vẫn vượt rate limit.
+## 1. LLM Batch Processing & Rate Limiting — RESOLVED
 
-**Triển vọng cải thiện:**
+**Giải pháp áp dụng (Phase 5A):**
 
-- **Giảm concurrency + tăng retry delay:** Giảm semaphore xuống 1-2, tăng retry delay lên 5-10 giây. Chậm nhưng ổn định hơn.
-- **Bỏ AI cho MEM layer:** Chỉ gọi LLM cho arch + mod + file layers (~120 entries), bỏ 887 MEM entries. Nhanh hơn 10x, vẫn có AI overview cấp module/file.
-- **Batch processing với interval:** Xử lý MEM entries theo batch nhỏ (5-10), chờ interval giữa các batch.
-- **Tách 2 pass:** Chạy `--skip-ai` trước để tạo static KB nhanh, sau đó chạy script riêng chỉ gọi LLM cho entries chưa có cache. Có thể chạy lại nhiều lần cho đến khi hết cache miss.
+- Giảm concurrency xuống 2 (từ 5), exponential backoff với 5 retries cho 429 errors
+- Chunked batch processing với configurable `chunk_size`
+- `--skip-mem-ai` flag cho phép bỏ AI cho MEM layer, tiết kiệm token
+- Cache mechanism tránh gọi lại entries đã xử lý
 
-**Files liên quan:** `kb_agent/analyzer/llm.py`, `kb_agent/analyzer/mem_layer.py`, `kb_agent/analyzer/pipeline.py`
-
----
-
-## 2. LLM Response Format Compatibility
-
-**Vấn đề:** Một số model không hỗ trợ `response_format: {"type": "json_object"}`. Ví dụ: `nvidia/llama-3.1-nemotron-nano-vl-8b-v1` (vision-language model) trả lỗi 500.
-
-**Triển vọng cải thiện:**
-
-- Detect model capability và fallback sang text parsing nếu model không hỗ trợ JSON mode.
-- Hoặc thử JSON mode, nếu fail thì retry không dùng `response_format`.
-- Validate model name trước khi gọi (warn nếu là VL model).
-
-**Files liên quan:** `kb_agent/analyzer/llm.py`
+**Files:** `kb_agent/analyzer/llm.py`, `kb_agent/analyzer/pipeline.py`
 
 ---
 
-## 3. Progress Reporting
+## 2. LLM Response Format Compatibility — RESOLVED
 
-**Vấn đề:** Khi chạy AI enrichment cho nhiều entries, không có tiến độ hiển thị. User không biết đã xử lý bao nhiêu / tổng bao nhiêu.
+**Giải pháp áp dụng (Phase 5A):**
 
-**Triển vọng cải thiện:**
+- Try JSON mode trước, fallback sang text parsing nếu model không hỗ trợ
+- Tự động detect và retry không dùng `response_format` trên JSON decode error
 
-- Thêm progress bar hoặc counter: `Processing MEM entries: 312/887 (35%)...`
-- Log số entries thành công vs thất bại sau mỗi batch.
-- Estimate thời gian còn lại dựa trên tốc độ xử lý trung bình.
-
-**Files liên quan:** `kb_agent/analyzer/pipeline.py`, `kb_agent/analyzer/mem_layer.py`, `kb_agent/analyzer/mod_layer.py`
+**Files:** `kb_agent/analyzer/llm.py`
 
 ---
 
-## 4. Incremental AI Enrichment
+## 3. Progress Reporting — RESOLVED
 
-**Vấn đề:** Hiện tại nếu AI enrichment bị gián đoạn (rate limit, network error), phải chạy lại toàn bộ. Cache giúp không gọi lại entries đã có, nhưng pipeline vẫn phải đi qua toàn bộ flow.
+**Giải pháp áp dụng (Phase 5A):**
 
-**Triển vọng cải thiện:**
+- `progress_callback(stage, current, total)` parameter trong pipeline
+- `tqdm` progress bars (graceful fallback nếu không có tqdm)
 
-- Thêm lệnh CLI riêng: `enrich --kb .kb` — chỉ gọi LLM cho entries chưa có AI summary.
-- Kiểm tra `.kb/.cache/` và `.kb/entries/` để xác định entries chưa được enrich.
-- Cho phép chạy nhiều lần cho đến khi tất cả entries đều có AI data.
-
-**Files liên quan:** `scripts/cli.py` (thêm command mới), `kb_agent/analyzer/pipeline.py`
+**Files:** `kb_agent/analyzer/pipeline.py`, `kb_agent/analyzer/mem_layer.py`, `kb_agent/analyzer/mod_layer.py`
 
 ---
 
-## 5. Error Resilience
+## 4. Incremental AI Enrichment — RESOLVED
 
-**Vấn đề:** Khi LLM call fail (429, 500, connection error), entry được ghi nhận nhưng không có AI data. Không có cơ chế retry sau đó cho riêng entries đó.
+**Giải pháp áp dụng (Phase 5A):**
 
-**Triển vọng cải thiện:**
+- New CLI command: `enrich --kb .kb [--retry-failed] [--batch-size 5]`
+- `Enricher` class: scan entries thiếu AI data → gọi LLM → update entries → rebuild FAISS
+- Chỉ xử lý entries chưa có AI summary, có thể chạy nhiều lần
 
-- Log failed entries vào `.kb/telemetry/llm_failures.jsonl` với lý do fail.
-- Cho phép retry chỉ các entries đã fail: `enrich --retry-failed --kb .kb`.
-- Differentiate giữa transient errors (429, connection) và permanent errors (invalid model, wrong API key).
+**Files:** `kb_agent/analyzer/enricher.py`, `scripts/cli.py`
 
-**Files liên quan:** `kb_agent/analyzer/llm.py`, `kb_agent/analyzer/pipeline.py`
+---
+
+## 5. Error Resilience — RESOLVED
+
+**Giải pháp áp dụng (Phase 5A):**
+
+- Failure logging vào `.kb/telemetry/llm_failures.jsonl` với lý do fail
+- `--retry-failed` flag cho phép retry chỉ entries đã fail
+- Transient vs Permanent error classification (429/503/timeout vs 401/403/invalid model)
+
+**Files:** `kb_agent/analyzer/llm.py`, `kb_agent/analyzer/enricher.py`
