@@ -37,6 +37,8 @@ class AnalysisPipeline:
         version_id: str | None = None,
         detect_bridges: bool = False,
         federated: bool = False,
+        skip_mem_ai: bool = False,
+        progress_callback=None,
     ) -> None:
         self._repo_root = repo_root.resolve()
         self._out_dir = out_dir.resolve()
@@ -47,6 +49,8 @@ class AnalysisPipeline:
         self._version_id = version_id
         self._detect_bridges = detect_bridges
         self._federated = federated
+        self._skip_mem_ai = skip_mem_ai
+        self._progress = progress_callback
 
     async def run(self) -> Manifest:
         """Run full pipeline: scan → parse → graph (opt) → views/layers → write."""
@@ -80,14 +84,42 @@ class AnalysisPipeline:
         self, file_entries, parse_results: dict[str, ParseResult],
     ) -> list[KBEntry]:
         """Run legacy layer-based analysis (when --with-graph is not set)."""
-        arch_analyzer = ArchitectureAnalyzer(self._llm)
-        arch_entries = await arch_analyzer.analyze(file_entries, parse_results)
+        # Set up LLM failure logging
+        if self._llm:
+            self._llm.set_failure_log(self._out_dir / "telemetry" / "llm_failures.jsonl")
 
-        mod_analyzer = ModuleAnalyzer(self._llm)
-        mod_entries = await mod_analyzer.analyze(arch_entries, parse_results)
+        arch_entries: list[KBEntry] = []
+        mod_entries: list[KBEntry] = []
+        mem_entries: list[KBEntry] = []
 
-        mem_analyzer = MemberAnalyzer(self._llm)
-        mem_entries = await mem_analyzer.analyze(mod_entries, parse_results)
+        try:
+            if self._progress:
+                self._progress("scan", 1, 4)
+            arch_analyzer = ArchitectureAnalyzer(self._llm)
+            arch_entries = await arch_analyzer.analyze(file_entries, parse_results)
+        except Exception as exc:
+            logger.error("Architecture layer failed: %s", exc)
+
+        try:
+            if self._progress:
+                self._progress("scan", 2, 4)
+            mod_analyzer = ModuleAnalyzer(self._llm)
+            mod_entries = await mod_analyzer.analyze(arch_entries, parse_results)
+        except Exception as exc:
+            logger.error("Module layer failed: %s", exc)
+
+        try:
+            if self._progress:
+                self._progress("scan", 3, 4)
+            mem_analyzer = MemberAnalyzer(self._llm, skip_ai=self._skip_mem_ai)
+            mem_entries = await mem_analyzer.analyze(
+                mod_entries, parse_results, progress_callback=self._progress,
+            )
+        except Exception as exc:
+            logger.error("Member layer failed: %s", exc)
+
+        if self._progress:
+            self._progress("scan", 4, 4)
 
         return self._link_entries(arch_entries, mod_entries, mem_entries)
 

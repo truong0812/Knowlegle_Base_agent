@@ -63,7 +63,7 @@ class TestLLMClient:
     def test_batch_complete(self, cache_dir: Path):
         call_count = 0
 
-        async def fake_complete(sys_p, user_p):
+        async def fake_complete(sys_p, user_p, **kwargs):
             nonlocal call_count
             call_count += 1
             return {"summary": f"result-{call_count}"}

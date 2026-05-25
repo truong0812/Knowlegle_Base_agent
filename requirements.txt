@@ -10,3 +10,5 @@ fastapi>=0.110
 uvicorn>=0.29
 python-dotenv>=1.0
 openai>=1.12
+watchdog>=3.0
+tqdm>=4.66

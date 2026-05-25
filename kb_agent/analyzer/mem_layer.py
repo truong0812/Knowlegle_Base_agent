@@ -31,13 +31,19 @@ Source:
 
 
 class MemberAnalyzer:
-    def __init__(self, llm_client: LLMClient | None = None) -> None:
+    def __init__(
+        self,
+        llm_client: LLMClient | None = None,
+        skip_ai: bool = False,
+    ) -> None:
         self._llm = llm_client
+        self._skip_ai = skip_ai
 
     async def analyze(
         self,
         mod_entries: list[KBEntry],
         parse_results: dict[str, ParseResult],
+        progress_callback=None,
     ) -> list[KBEntry]:
         """Produce member-level entries from parsed symbols."""
         # Build a lookup: file_path -> module_id
@@ -59,7 +65,7 @@ class MemberAnalyzer:
                 entry_id = self._build_entry_id(sym, rel_path, module_id, parent_name)
 
                 ai_data = AIData()
-                if self._llm and sym.signature:
+                if self._llm and sym.signature and not self._skip_ai:
                     user_prompt = MEM_USER_PROMPT.format(
                         mod_summary=mod_summary,
                         name=sym.name,
@@ -77,6 +83,9 @@ class MemberAnalyzer:
                         )
                     except Exception as exc:
                         logger.warning("Member LLM analysis failed for %s: %s", sym.name, exc)
+
+                if progress_callback:
+                    progress_callback("MEM", len(entries), 0)
 
                 entries.append(
                     KBEntry(
