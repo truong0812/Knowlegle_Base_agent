@@ -216,14 +216,16 @@ def create_app(kb_dir: Path) -> FastAPI:
 
     @app.get("/api/file/{file_path:path}")
     def api_file_source(file_path: str, start: int = Query(0), end: int = Query(0)):
-        # Prevent path traversal using commonpath for cross-platform safety
-        resolved = (kb_dir.parent / file_path).resolve()
+        # Prevent path traversal — resolved must be contained within repo root
+        repo_root = kb_dir.parent.resolve()
+        resolved = (repo_root / file_path).resolve()
         try:
-            os.path.commonpath([resolved, kb_dir.parent.resolve()])
+            if os.path.commonpath([str(resolved), str(repo_root)]) != str(repo_root):
+                raise HTTPException(status_code=403, detail="Access denied")
         except ValueError:
             raise HTTPException(status_code=403, detail="Access denied")
 
-        if not resolved.exists():
+        if not resolved.is_file():
             raise HTTPException(status_code=404, detail="File not found")
 
         try:
