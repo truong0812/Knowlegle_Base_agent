@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -215,9 +216,11 @@ def create_app(kb_dir: Path) -> FastAPI:
 
     @app.get("/api/file/{file_path:path}")
     def api_file_source(file_path: str, start: int = Query(0), end: int = Query(0)):
-        # Prevent path traversal
+        # Prevent path traversal using commonpath for cross-platform safety
         resolved = (kb_dir.parent / file_path).resolve()
-        if not str(resolved).startswith(str(kb_dir.parent.resolve())):
+        try:
+            os.path.commonpath([resolved, kb_dir.parent.resolve()])
+        except ValueError:
             raise HTTPException(status_code=403, detail="Access denied")
 
         if not resolved.exists():
