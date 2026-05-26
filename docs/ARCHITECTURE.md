@@ -19,6 +19,9 @@ Scanner → Parser → Graph Builder → Materialized Views → FAISS Index → 
                                   ↘ Temporal Snapshots
                                   ↘ Cross-Language Bridges
                                   ↘ Runtime Telemetry
+                                  ↘ MCP Server (Phase 5)
+                                  ↘ Interactive Dashboard (Phase 5)
+                                  ↘ Incremental Enricher (Phase 5)
 ```
 
 Symbol Graph là trung tâm — source of truth duy nhất. Mọi thứ khác (KB entries, embeddings, context) là materialized views sinh ra từ graph.
@@ -384,14 +387,69 @@ Heuristic ranking model: adjust edge weights, hop limits, suppression rules dự
 - `add-repo` register external graph, `resolve-cross-repo` persist foreign nodes
 - Graph cleanup on repo removal, dedup against current edges
 
-### Observability Dashboard
+### Observability
 
-Graph health metrics + retrieval analytics:
+Text-based graph health và retrieval analytics:
 
 - Node/edge counts, confidence distribution, orphan-node ratio
 - Bridge và cross-repo edge counts
 - Feedback volume, useful-feedback rate
-- `dashboard`, `graph-health`, `query-analytics` CLI commands
+- `graph-health`, `query-analytics` CLI commands
+
+Web dashboard cho interactive visualization — xem phần "Interactive Dashboard" bên dưới.
+
+### MCP Server (Phase 5)
+
+MCP (Model Context Protocol) server cho phép AI coding agents (Claude Code, Cursor, etc.) query knowledge graph trực tiếp qua stdio transport.
+
+```text
+AI Agent ←stdio/JSON-RPC→ MCP Server → GraphStorage + QueryEngine + RetrievalEngine
+                                    → FAISS Index
+                                    → KB Entries
+```
+
+9 tools wrapping existing code:
+
+| Tool | Wraps | Speed |
+|------|-------|-------|
+| `kb_search` | `QueryEngine.query()` | Requires FAISS |
+| `kb_context` | `RetrievalEngine.retrieve()` | Requires FAISS + graph |
+| `kb_callers` | Graph adjacency (reverse traversal) | Fast (no FAISS) |
+| `kb_callees` | Graph adjacency (forward traversal) | Fast (no FAISS) |
+| `kb_impact` | `expand_from_seeds()` | Requires graph |
+| `kb_node` | `GraphStorage` + KB entry | Fast |
+| `kb_explore` | `RetrievalEngine` + source reading | Requires FAISS + graph |
+| `kb_status` | `DashboardAnalyzer` + `Manifest` | Fast |
+| `kb_files` | Entry grouping by path | Fast |
+
+Auto-init: Khi MCP server start, check `.kb/` exists. Nếu không → chạy `AnalysisPipeline` với `skip_ai=True` để tạo fast static KB.
+
+File watcher: `watchdog` observer, debounce 2 giây, incremental rebuild khi source thay đổi.
+
+### Interactive Dashboard (Phase 5)
+
+FastAPI backend + D3.js frontend cho graph visualization.
+
+```text
+Browser ←HTTP→ FastAPI Server → .kb/ (direct read, no database)
+                        ↗ REST API (/api/*)
+                        ↘ Static Files (/static/*)
+```
+
+10 REST endpoints đọc trực tiếp từ `.kb/` — không cần database hay WebSocket.
+
+Frontend features: force-directed graph, confidence visualization, hot-path highlighting, semantic search, node detail panel, layer filters, bridge visualization, temporal version list.
+
+### Incremental Enrichment (Phase 5)
+
+`Enricher` class cho phép enrich KB entries chưa có AI data mà không cần chạy lại toàn bộ pipeline.
+
+```text
+.kb/entries/ → scan missing AI data → LLM batch process → update entries → rebuild FAISS index
+                                                                  ↘ log failures to llm_failures.jsonl
+```
+
+Hỗ trợ `--retry-failed` để retry entries đã fail trước đó. Failure logging phân loại TransientError vs PermanentError.
 
 ---
 
@@ -451,6 +509,7 @@ System hiểu Presentation → Application → Domain → Infrastructure layers.
 | Phase 2 | ~10 | +0 | ~2000 |
 | Phase 3 | ~15 | +1 (BRIDGES_TO) | ~4000 |
 | Phase 4 | ~10 | +0 | ~2240 |
+| Phase 5 | ~12 | +0 | ~1500 |
 
 ### Nguyên tắc
 

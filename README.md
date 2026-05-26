@@ -76,14 +76,17 @@ Symbol Graph là trung tâm — source of truth duy nhất. Mọi thứ khác (K
 
 ## Trạng Thái Hiện Tại
 
-Hệ thống 4 phase đã hoàn thành đầy đủ (314 tests passing):
+Hệ thống 5 phase đã hoàn thành đầy đủ (320 tests passing):
 
 - Scanner/parser cho Python, C#, C++
 - Symbol graph với graduated confidence
 - 4 materialized views: `arch`, `mod`, `file`, `mem`
 - Graph-aware retrieval với intent planning
 - Cross-language bridging, temporal graph, hot-path
-- Runtime telemetry, self-tuning retrieval, multi-repo federation, dashboard
+- Runtime telemetry, self-tuning retrieval, multi-repo federation
+- **MCP Server** cho AI coding agents (Claude Code, Cursor, etc.)
+- **Interactive web dashboard** với D3.js visualization
+- **Incremental enrichment** và improved LLM resilience
 
 Lịch sử chi tiết từng phase tại [docs/CHANGELOG.md](docs/CHANGELOG.md).
 
@@ -152,7 +155,7 @@ Graph-aware static snapshot:
 python -m scripts.cli analyze --repo /path/to/project-a --out /path/to/project-a/.kb --skip-ai --with-graph --depth 2
 ```
 
-LLM enrichment có thể bật bằng cách bỏ `--skip-ai` và cấu hình `OPENAI_API_KEY`.
+LLM enrichment có thể bật bằng cách bỏ `--skip-ai` và cấu hình `OPENAI_API_KEY`. Dùng `--skip-mem-ai` để bỏ AI cho MEM layer (tiết kiệm token khi repo lớn).
 
 ### Validate
 
@@ -253,15 +256,9 @@ python -m scripts.cli update-shared-deps --kb /path/to/project-a/.kb
 
 Use this after each repository has been analyzed with `--with-graph`. `add-repo` records the external graph, while `resolve-cross-repo` persists namespaced foreign nodes and `REFERENCES_REPO` edges so graph-aware queries can traverse repository boundaries.
 
-### Dashboard
+### Dashboard (Text)
 
-Show graph health and retrieval analytics together:
-
-```bash
-python -m scripts.cli dashboard --kb /path/to/project-a/.kb
-```
-
-For narrower output, use the split commands:
+Hiển thị graph health và retrieval analytics trong terminal:
 
 ```bash
 python -m scripts.cli graph-health --kb /path/to/project-a/.kb
@@ -269,6 +266,61 @@ python -m scripts.cli query-analytics --kb /path/to/project-a/.kb
 ```
 
 Example output includes node/edge counts, confidence distribution, orphan-node ratio, bridge and cross-repo edge counts, feedback volume, and useful-feedback rate.
+
+### MCP Server
+
+Start MCP server để AI coding agents (Claude Code, Cursor, etc.) query knowledge graph trực tiếp qua stdio transport:
+
+```bash
+python -m scripts.cli serve --kb /path/to/project-a/.kb
+```
+
+Với file watcher (auto-sync khi source thay đổi):
+
+```bash
+python -m scripts.cli serve --kb /path/to/project-a/.kb --watch
+```
+
+MCP server cung cấp 9 tools: `kb_search`, `kb_context`, `kb_callers`, `kb_callees`, `kb_impact`, `kb_node`, `kb_explore`, `kb_status`, `kb_files`.
+
+Để tích hợp với Claude Code, thêm vào `.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "kb-agent": {
+      "command": "python",
+      "args": ["-m", "scripts.cli", "serve", "--kb", ".kb"]
+    }
+  }
+}
+```
+
+### Incremental Enrichment
+
+Enrich KB entries chưa có AI data, không cần chạy lại toàn bộ pipeline:
+
+```bash
+python -m scripts.cli enrich --kb /path/to/project-a/.kb
+```
+
+Retry entries đã fail trước đó:
+
+```bash
+python -m scripts.cli enrich --kb /path/to/project-a/.kb --retry-failed
+```
+
+Chỉ enrich entries chưa có AI summary. Failures được log vào `.kb/telemetry/llm_failures.jsonl`.
+
+### Web Dashboard
+
+Launch interactive graph visualization trong browser (FastAPI + D3.js):
+
+```bash
+python -m scripts.cli dashboard --kb /path/to/project-a/.kb
+```
+
+Dashboard cung cấp force-directed graph visualization (D3.js), confidence visualization, hot-path highlighting, semantic search, và node detail panel. REST API tại `/api/*` endpoints.
 
 ### Troubleshooting
 
@@ -280,6 +332,8 @@ Common Phase 4 CLI failures usually mean a prerequisite artifact is missing:
 | `No traces found. Run ingest-telemetry first.` | Ingest traces with `python -m scripts.cli ingest-telemetry traces.json --kb <repo>/.kb`. |
 | `No tuning config found. Run train-ranking-model first.` | Collect/write feedback to `.kb/telemetry/feedback.jsonl`, then run `train-ranking-model`. |
 | External repo cannot be registered or resolved | Pass the external repository's `.kb` directory, and make sure it contains `graph/nodes.jsonl` and `graph/edges.jsonl`. |
+| `No source files found. Run analyze first.` | Rebuild the KB with `python -m scripts.cli analyze --repo <repo> --out <repo>/.kb --skip-ai --with-graph --depth 2`. |
+| `watchdog` not found for `--watch` | Install with `pip install watchdog>=3.0`. |
 
 ## Output
 
@@ -308,6 +362,7 @@ Common Phase 4 CLI failures usually mean a prerequisite artifact is missing:
 | Phase 2 | Confident Graph | **Đã hoàn thành** | Enhanced resolution, confidence propagation, feature overlay, query planner |
 | Phase 3 | Intelligent Retrieval | **Đã hoàn thành** | Cross-language bridging, temporal graph, hot-path, graph-aware embeddings |
 | Phase 4 | Production Intelligence | **Đã hoàn thành** | Runtime telemetry, self-tuning retrieval, multi-repo federation, dashboard |
+| Phase 5 | MCP + Dashboard | **Đã hoàn thành** | MCP server, interactive web dashboard, incremental enrichment, LLM resilience fixes |
 
 ## Nguyên Tắc Phát Triển
 

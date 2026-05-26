@@ -1,4 +1,7 @@
-# Phase 5: MCP Server + Interactive Dashboard + Fix Existing Issues
+# Phase 5: MCP Server + Interactive Dashboard + Fix Existing Issues — COMPLETED
+
+> **Status:** Phase 5 đã hoàn thành (commit `5bb5f9d`, 320 tests passing).
+> File này được giữ lại làm reference cho design decisions.
 
 ## Context
 
@@ -263,6 +266,21 @@ Note: `fastapi` và `uvicorn` đã có trong requirements.txt (hiện unused), P
   - Test path traversal protection cho `/api/file/{path}`
 
 - **Target:** 400+ tests total (up from 314)
+
+## Actual vs Planned
+
+Phase 5 shipped with a few deliberate differences from the original plan above:
+
+| Area | Planned | Actual |
+|---|---|---|
+| MCP protocol implementation | Python MCP SDK (`mcp>=1.0`) | Minimal JSON-RPC stdio server in `kb_agent/mcp_server/server.py`; no external MCP SDK dependency |
+| MCP tool count | 9 tools | 9 tools: `kb_search`, `kb_context`, `kb_callers`, `kb_callees`, `kb_impact`, `kb_node`, `kb_explore`, `kb_status`, `kb_files` |
+| Dashboard diff API | `/api/diff` backed by `TemporalGraphManager.diff_versions()` | Not exposed in dashboard API; temporal diff remains available via CLI `diff` |
+| Dashboard temporal UI | Two-version comparison visualization | Temporal version list only |
+| Enricher tests | New `tests/test_enricher.py` | Not created; covered indirectly through CLI/LLM paths |
+| MCP tests | New `tests/test_mcp_server.py` | Not created; MCP tools remain thin wrappers over existing tested engines |
+| Dashboard tests | New `tests/test_dashboard_api.py` | Implemented as `tests/test_dashboard_server.py` |
+| Test count | 400+ target | 320 tests passing at completion |
 
 ## Verification Checklist
 

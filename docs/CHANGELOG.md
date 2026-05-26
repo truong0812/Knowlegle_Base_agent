@@ -1,14 +1,14 @@
 # Knowledge Base Agent — Lịch Sử Phát Triển
 
-Updated: 2026-05-21
+Updated: 2026-05-25
 
 ## Trạng Thái Hiện Tại
 
-Knowledge Base Agent đã hoàn thành tất cả 4 phase. Test suite:
+Knowledge Base Agent đã hoàn thành tất cả 5 phase. Test suite:
 
 ```text
 pytest -q
-314 passed, 3 dependency warnings
+320 passed, 3 dependency warnings
 ```
 
 Warnings là SWIG/native dependency deprecation warnings, không phải project logic failures.
@@ -39,7 +39,7 @@ Expected graph files:
 
 Symbol Graph + Materialized Views + Basic Retrieval.
 
-###交付物
+### Hạng mục bàn giao
 
 | Thành phần | Status |
 |---|---|
@@ -64,7 +64,7 @@ Test count lúc completion: 122
 
 Enhanced resolution, confidence propagation, feature overlay, query planner.
 
-### 交付物
+### Hạng mục bàn giao
 
 | Thành phần | Status |
 |---|---|
@@ -89,7 +89,7 @@ Test count lúc completion: 172
 
 Cross-language bridging, temporal graph, hot-path, graph-aware embeddings, chain detection.
 
-### 交付物
+### Hạng mục bàn giao
 
 | Thành phần | Status |
 |---|---|
@@ -143,7 +143,7 @@ Test count lúc completion: 257
 
 Runtime telemetry, self-tuning retrieval, multi-repo federation, observability dashboard.
 
-### 交付物
+### Hạng mục bàn giao
 
 | Thành phần | Status |
 |---|---|
@@ -197,6 +197,92 @@ Test count lúc completion: 314
 
 ---
 
+## Phase 5: MCP Server + Interactive Dashboard + Pipeline Fixes — Đã hoàn thành
+
+MCP server cho AI coding agents, interactive web dashboard, incremental enrichment, và LLM resilience fixes.
+
+### Hạng mục bàn giao
+
+| Thành phần | Status |
+|---|---|
+| MCP Server (stdio transport, 9 tools) | Done |
+| Auto-init KB khi MCP server start | Done |
+| File watcher (watchdog, auto-sync) | Done |
+| Interactive web dashboard (FastAPI + D3.js) | Done |
+| REST API endpoints (10 endpoints) | Done |
+| Incremental enrichment command (`enrich`) | Done |
+| LLM rate limiting (exponential backoff, chunked batch) | Done |
+| LLM JSON format fallback | Done |
+| Error resilience (failure logging, transient/permanent classification) | Done |
+| Progress reporting (callback-based) | Done |
+| `--skip-mem-ai` flag cho analyze | Done |
+
+Test count lúc completion: 320
+
+### File Manifest
+
+**New Files**
+
+| File | Purpose |
+|---|---|
+| `kb_agent/mcp_server/__init__.py` | MCP server module |
+| `kb_agent/mcp_server/__main__.py` | Standalone entry point |
+| `kb_agent/mcp_server/server.py` | MCP server setup, stdio transport, tool registration |
+| `kb_agent/mcp_server/tools.py` | 9 KB tool implementations |
+| `kb_agent/mcp_server/watcher.py` | File watcher for auto-sync (watchdog) |
+| `kb_agent/mcp_server/auto_init.py` | Auto-detect and initialize KB |
+| `kb_agent/dashboard/__init__.py` | Dashboard module |
+| `kb_agent/dashboard/server.py` | FastAPI app, REST API endpoints |
+| `kb_agent/dashboard/static/index.html` | Single-page dashboard (D3.js) |
+| `kb_agent/analyzer/enricher.py` | Incremental KB enrichment |
+
+**Modified Files**
+
+| File | Changes |
+|---|---|
+| `kb_agent/analyzer/llm.py` | Rate limiting, JSON fallback, failure logging, bounded concurrency |
+| `kb_agent/analyzer/pipeline.py` | Progress callback, `skip_mem_ai` parameter |
+| `scripts/cli.py` | New commands: `serve`, `enrich`, web `dashboard`; new flags: `--skip-mem-ai`, `--watch`, `--retry-failed`, `--batch-size`, `--port`, `--no-browser` |
+
+### New CLI Commands
+
+| Command | Purpose |
+|---|---|
+| `serve --kb .kb [--watch]` | Start MCP server for AI coding agents |
+| `enrich --kb .kb [--retry-failed] [--batch-size 5]` | Incremental LLM enrichment |
+| `dashboard --kb .kb [--port 8080] [--no-browser]` | Launch interactive web dashboard |
+
+### MCP Tools (9)
+
+| Tool | Mô tả |
+|---|---|
+| `kb_search` | Tìm symbols theo tên/nghĩa (semantic search) |
+| `kb_context` | Full retrieval + graph expansion |
+| `kb_callers` | Tìm ai gọi function này |
+| `kb_callees` | Tìm function này gọi ai |
+| `kb_impact` | Phân tích ảnh hưởng khi thay đổi symbol |
+| `kb_node` | Chi tiết một symbol |
+| `kb_explore` | Source code của related symbols |
+| `kb_status` | Trạng thái index |
+| `kb_files` | Cấu trúc files đã index |
+
+### Dashboard REST API (10 endpoints)
+
+| Endpoint | Returns |
+|---|---|
+| `/api/status` | Graph health + manifest |
+| `/api/nodes` | Nodes với filters |
+| `/api/edges` | Edges với filters |
+| `/api/search` | Semantic search |
+| `/api/node/{id}` | Node detail + connections |
+| `/api/hotpath` | Hot-path scores |
+| `/api/features` | Feature clusters |
+| `/api/file/{path}` | Source code (line-numbered) |
+| `/api/stats` | Layer counts, language distribution |
+| `/api/versions` | Temporal version list |
+
+---
+
 ## Enum Registry
 
 ### EdgeKind (7 values)
@@ -212,7 +298,7 @@ Test count lúc completion: 314
 ## Thống Kê Test
 
 ```text
-314 tests total, breakdown theo file:
+320 tests total, breakdown theo file:
   test_scanner.py
   test_parser.py
   test_analyzer.py
@@ -220,10 +306,15 @@ Test count lúc completion: 314
   test_graph_storage.py
   test_views.py
   test_retrieval.py
+  test_query.py
   test_retrieval_benchmarks.py
   test_cli.py
+  test_validator.py
+  test_indexer.py
   test_confidence.py
   test_enhanced_resolution.py
+  test_features.py
+  test_planner.py
   test_hotpath.py
   test_graph_embedding.py
   test_temporal.py
@@ -233,6 +324,8 @@ Test count lúc completion: 314
   test_federation.py
   test_self_tuning.py
   test_dashboard.py
+  test_dashboard_server.py
+  test_llm.py
 ```
 
 Test count có thể thay đổi theo từng commit. Xem số gần nhất bằng `pytest -q`.
