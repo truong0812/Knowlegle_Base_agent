@@ -39,7 +39,7 @@ Expected graph files:
 
 Symbol Graph + Materialized Views + Basic Retrieval.
 
-###交付物
+### Hạng mục bàn giao
 
 | Thành phần | Status |
 |---|---|
@@ -64,7 +64,7 @@ Test count lúc completion: 122
 
 Enhanced resolution, confidence propagation, feature overlay, query planner.
 
-### 交付物
+### Hạng mục bàn giao
 
 | Thành phần | Status |
 |---|---|
@@ -89,7 +89,7 @@ Test count lúc completion: 172
 
 Cross-language bridging, temporal graph, hot-path, graph-aware embeddings, chain detection.
 
-### 交付物
+### Hạng mục bàn giao
 
 | Thành phần | Status |
 |---|---|
@@ -143,7 +143,7 @@ Test count lúc completion: 257
 
 Runtime telemetry, self-tuning retrieval, multi-repo federation, observability dashboard.
 
-### 交付物
+### Hạng mục bàn giao
 
 | Thành phần | Status |
 |---|---|
@@ -201,7 +201,7 @@ Test count lúc completion: 314
 
 MCP server cho AI coding agents, interactive web dashboard, incremental enrichment, và LLM resilience fixes.
 
-### 交付物
+### Hạng mục bàn giao
 
 | Thành phần | Status |
 |---|---|
