@@ -8,7 +8,6 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from kb_agent.graph.storage import GraphStorage
@@ -35,12 +34,73 @@ def create_app(kb_dir: Path) -> FastAPI:
     # Cache loaded data
     state: dict = {"mapper": None, "nodes": None, "edges": None}
 
+    def kb_missing_error(message: str = "Knowledge base not found. Run analyze first.") -> dict:
+        return {"code": "missing_kb", "message": message}
+
     def get_mapper() -> ViewIDMapper:
         if state["mapper"] is None:
             storage = GraphStorage(graph_dir)
             state["nodes"], state["edges"] = storage.load()
             state["mapper"] = ViewIDMapper(state["nodes"], state["edges"])
         return state["mapper"]
+
+    def get_graph_storage() -> GraphStorage:
+        return GraphStorage(graph_dir)
+
+    def get_entry_count(manifest: dict) -> int:
+        manifest_total = manifest.get("stats", {}).get("total_entries")
+        if isinstance(manifest_total, int):
+            return manifest_total
+        if entries_dir.exists():
+            return sum(1 for path in entries_dir.glob("*.json") if path.is_file())
+        return 0
+
+    def load_arch_summary() -> str | None:
+        arch_path = entries_dir / "arch_root.json"
+        if not arch_path.exists():
+            return None
+        try:
+            entry = json.loads(arch_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+        ai = entry.get("ai", {})
+        return ai.get("summary") or ai.get("purpose")
+
+    def top_modules(nodes: list, limit: int = 8) -> list[str]:
+        counts: dict[str, int] = {}
+        for node in nodes:
+            path = Path(node.path)
+            parts = path.parts
+            if len(parts) >= 2:
+                module = ".".join(parts[:2])
+            elif parts:
+                module = parts[0]
+            else:
+                module = node.path
+            if module:
+                counts[module] = counts.get(module, 0) + 1
+        return [
+            name for name, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
+        ]
+
+    def node_detail_for_feature(node_id: str, hotpath: dict) -> dict | None:
+        mapper = get_mapper()
+        node = mapper.node_by_id.get(node_id)
+        if node is None:
+            return None
+        hp = hotpath.get(node_id)
+        return {
+            "node_id": node_id,
+            "name": node.name,
+            "kind": node.kind.value,
+            "language": node.language.value,
+            "path": node.path,
+            "line_start": node.line_start,
+            "line_end": node.line_end,
+            "signature": node.signature,
+            "hotness": hp.hotness if hp else None,
+            "incoming_calls": hp.incoming_calls if hp else None,
+        }
 
     # --- REST API ---
 
@@ -118,6 +178,82 @@ def create_app(kb_dir: Path) -> FastAPI:
             return {"results": entries_data}
         except (FileNotFoundError, ImportError) as e:
             raise HTTPException(status_code=404, detail=str(e))
+
+    @app.get("/api/overview")
+    def api_overview():
+        manifest_path = kb_dir / "manifest.json"
+        empty_payload = {
+            "summary": None,
+            "source_repo": None,
+            "created_at": None,
+            "stats": None,
+            "languages": [],
+            "top_modules": [],
+            "top_features": [],
+            "top_hot_symbols": [],
+        }
+        if not manifest_path.exists():
+            return {**empty_payload, "error": kb_missing_error()}
+
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=500, detail=f"Invalid manifest.json: {exc}") from exc
+
+        mapper = get_mapper()
+        nodes = state["nodes"] or []
+        edges = state["edges"] or []
+
+        storage = get_graph_storage()
+        hotpath = storage.load_hotpath()
+        features = storage.load_features()
+        node_by_id = mapper.node_by_id
+
+        top_hot_symbols = []
+        for node_id, score in sorted(
+            hotpath.items(),
+            key=lambda item: (-item[1].hotness, -item[1].incoming_calls, item[0]),
+        )[:10]:
+            node = node_by_id.get(node_id)
+            top_hot_symbols.append({
+                "node_id": node_id,
+                "name": node.name if node else node_id,
+                "path": node.path if node else None,
+                "line_start": node.line_start if node else None,
+                "line_end": node.line_end if node else None,
+                "hotness": score.hotness,
+                "incoming_calls": score.incoming_calls,
+            })
+
+        top_features = [
+            {
+                "id": feature.id,
+                "name": feature.name,
+                "member_count": len(feature.member_node_ids),
+                "naming_basis": feature.naming_basis,
+                "edge_density": feature.edge_density,
+            }
+            for feature in sorted(
+                features,
+                key=lambda item: (-item.edge_density, -len(item.member_node_ids), item.name),
+            )[:10]
+        ]
+
+        return {
+            "summary": load_arch_summary(),
+            "source_repo": manifest.get("source_repo"),
+            "created_at": manifest.get("created_at"),
+            "stats": {
+                "total_entries": get_entry_count(manifest),
+                "node_count": len(nodes),
+                "edge_count": len(edges),
+            },
+            "languages": manifest.get("languages", []),
+            "top_modules": top_modules(nodes),
+            "top_features": top_features,
+            "top_hot_symbols": top_hot_symbols,
+            "error": None,
+        }
 
     @app.get("/api/node/{node_id:path}")
     def api_node_detail(node_id: str):
@@ -212,6 +348,32 @@ def create_app(kb_dir: Path) -> FastAPI:
                 }
                 for f in features
             ]
+        }
+
+    @app.get("/api/features/{feature_id:path}")
+    def api_feature_detail(feature_id: str):
+        storage = get_graph_storage()
+        features = storage.load_features()
+        feature = next((f for f in features if f.id == feature_id), None)
+        if feature is None:
+            raise HTTPException(status_code=404, detail="Feature not found")
+
+        hotpath = storage.load_hotpath()
+        members = [
+            detail
+            for node_id in feature.member_node_ids
+            if (detail := node_detail_for_feature(node_id, hotpath)) is not None
+        ]
+        related_files = sorted({member["path"] for member in members if member.get("path")})
+
+        return {
+            "id": feature.id,
+            "name": feature.name,
+            "naming_basis": feature.naming_basis,
+            "edge_density": feature.edge_density,
+            "member_count": len(feature.member_node_ids),
+            "members": members,
+            "related_files": related_files,
         }
 
     @app.get("/api/file/{file_path:path}")
