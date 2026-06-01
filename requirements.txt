@@ -8,6 +8,7 @@ sentence-transformers>=2.6
 faiss-cpu>=1.7
 fastapi>=0.110
 uvicorn>=0.29
+orjson>=3.9
 python-dotenv>=1.0
 openai>=1.12
 watchdog>=3.0

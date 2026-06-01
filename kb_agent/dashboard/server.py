@@ -1,7 +1,7 @@
 """FastAPI REST API backend for the interactive dashboard."""
 from __future__ import annotations
 
-import json
+import orjson
 import logging
 import os
 from pathlib import Path
@@ -32,7 +32,7 @@ def create_app(kb_dir: Path) -> FastAPI:
     entries_dir = kb_dir / "entries"
 
     # Cache loaded data
-    state: dict = {"mapper": None, "nodes": None, "edges": None}
+    state: dict = {"mapper": None, "nodes": None, "edges": None, "hotpath": None, "features": None}
 
     def kb_missing_error(message: str = "Knowledge base not found. Run analyze first.") -> dict:
         return {"code": "missing_kb", "message": message}
@@ -44,8 +44,15 @@ def create_app(kb_dir: Path) -> FastAPI:
             state["mapper"] = ViewIDMapper(state["nodes"], state["edges"])
         return state["mapper"]
 
-    def get_graph_storage() -> GraphStorage:
-        return GraphStorage(graph_dir)
+    def get_hotpath() -> dict:
+        if state["hotpath"] is None:
+            state["hotpath"] = GraphStorage(graph_dir).load_hotpath()
+        return state["hotpath"]
+
+    def get_features() -> list:
+        if state["features"] is None:
+            state["features"] = GraphStorage(graph_dir).load_features()
+        return state["features"]
 
     def get_entry_count(manifest: dict) -> int:
         manifest_total = manifest.get("stats", {}).get("total_entries")
@@ -60,8 +67,8 @@ def create_app(kb_dir: Path) -> FastAPI:
         if not arch_path.exists():
             return None
         try:
-            entry = json.loads(arch_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
+            entry = orjson.loads(arch_path.read_bytes())
+        except orjson.JSONDecodeError:
             return None
         ai = entry.get("ai", {})
         return ai.get("summary") or ai.get("purpose")
@@ -110,10 +117,10 @@ def create_app(kb_dir: Path) -> FastAPI:
         if not manifest_path.exists():
             return {"status": "not_initialized"}
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest = orjson.loads(manifest_path.read_bytes())
         except FileNotFoundError:
             return {"status": "not_initialized"}
-        except json.JSONDecodeError as exc:
+        except orjson.JSONDecodeError as exc:
             raise HTTPException(status_code=500, detail=f"Invalid manifest.json: {exc}") from exc
         mapper = get_mapper()
         manifest["graph"] = {
@@ -201,19 +208,18 @@ def create_app(kb_dir: Path) -> FastAPI:
             return {**empty_payload, "error": kb_missing_error()}
 
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest = orjson.loads(manifest_path.read_bytes())
         except FileNotFoundError:
             return {**empty_payload, "error": kb_missing_error()}
-        except json.JSONDecodeError as exc:
+        except orjson.JSONDecodeError as exc:
             raise HTTPException(status_code=500, detail=f"Invalid manifest.json: {exc}") from exc
 
         mapper = get_mapper()
         nodes = state["nodes"] or []
         edges = state["edges"] or []
 
-        storage = get_graph_storage()
-        hotpath = storage.load_hotpath()
-        features = storage.load_features()
+        hotpath = get_hotpath()
+        features = get_features()
         node_by_id = mapper.node_by_id
 
         top_hot_symbols = []
@@ -308,10 +314,10 @@ def create_app(kb_dir: Path) -> FastAPI:
         from kb_agent.query.engine import entry_filename
         entry_path = entries_dir / entry_filename(node_id)
         if entry_path.exists():
-            entry_data = json.loads(entry_path.read_text(encoding="utf-8"))
+            entry_data = orjson.loads(entry_path.read_bytes())
 
         # Hot-path score
-        hotpath = GraphStorage(graph_dir).load_hotpath()
+        hotpath = get_hotpath()
         hp = hotpath.get(node_id)
 
         return {
@@ -333,17 +339,17 @@ def create_app(kb_dir: Path) -> FastAPI:
 
     @app.get("/api/hotpath")
     def api_hotpath():
-        scores = GraphStorage(graph_dir).load_hotpath()
+        hotpath = get_hotpath()
         return {
             "scores": [
                 {"node_id": nid, "hotness": s.hotness, "incoming_calls": s.incoming_calls}
-                for nid, s in scores.items()
+                for nid, s in hotpath.items()
             ]
         }
 
     @app.get("/api/features")
     def api_features():
-        features = GraphStorage(graph_dir).load_features()
+        features = get_features()
         return {
             "features": [
                 {
@@ -359,13 +365,12 @@ def create_app(kb_dir: Path) -> FastAPI:
 
     @app.get("/api/features/{feature_id:path}")
     def api_feature_detail(feature_id: str):
-        storage = get_graph_storage()
-        features = storage.load_features()
+        features = get_features()
         feature = next((f for f in features if f.id == feature_id), None)
         if feature is None:
             raise HTTPException(status_code=404, detail="Feature not found")
 
-        hotpath = storage.load_hotpath()
+        hotpath = get_hotpath()
         members = [
             detail
             for node_id in feature.member_node_ids
