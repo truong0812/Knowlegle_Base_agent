@@ -17,12 +17,21 @@ let svg;
 let showHotpath = false;
 let activeEdgeFilter = "";
 
-async function apiFetch(url) {
-    const response = await fetch(url);
-    if (!response.ok) {
-        throw new Error(`API error: ${response.status} ${response.statusText}`);
+async function apiFetch(url, timeoutMs = 10000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(url, { signal: controller.signal });
+        if (!response.ok) {
+            const detail = response.headers.get("content-type")?.includes("json")
+                ? (await response.json()).detail || response.statusText
+                : response.statusText;
+            throw new Error(`API error: ${response.status} ${detail}`);
+        }
+        return response.json();
+    } finally {
+        clearTimeout(timer);
     }
-    return response.json();
 }
 
 async function loadGraph() {

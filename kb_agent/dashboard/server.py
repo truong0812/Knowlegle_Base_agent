@@ -123,6 +123,8 @@ def create_app(kb_dir: Path) -> FastAPI:
             return {"status": "not_initialized"}
         try:
             manifest = orjson.loads(manifest_path.read_bytes())
+        except FileNotFoundError:
+            return {"status": "not_initialized"}
         except orjson.JSONDecodeError as exc:
             raise HTTPException(status_code=500, detail=f"Invalid manifest.json: {exc}") from exc
         mapper = get_mapper()
@@ -212,6 +214,8 @@ def create_app(kb_dir: Path) -> FastAPI:
 
         try:
             manifest = orjson.loads(manifest_path.read_bytes())
+        except FileNotFoundError:
+            return {**empty_payload, "error": kb_missing_error()}
         except orjson.JSONDecodeError as exc:
             raise HTTPException(status_code=500, detail=f"Invalid manifest.json: {exc}") from exc
 
