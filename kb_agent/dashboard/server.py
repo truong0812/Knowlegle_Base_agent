@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from kb_agent.graph.storage import GraphStorage
+from kb_agent.graph.storage import GraphStorage, ReadOnlyStorage
 from kb_agent.views.base import ViewIDMapper
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,9 @@ def create_app(kb_dir: Path) -> FastAPI:
     graph_dir = kb_dir / "graph"
     entries_dir = kb_dir / "entries"
 
+    # Single storage instance — typed against the read-only interface
+    storage: ReadOnlyStorage = GraphStorage(graph_dir)
+
     # Cache loaded data
     state: dict = {"mapper": None, "nodes": None, "edges": None, "hotpath": None, "features": None, "name_index": None}
 
@@ -38,7 +41,6 @@ def create_app(kb_dir: Path) -> FastAPI:
 
     def get_mapper() -> ViewIDMapper:
         if state["mapper"] is None:
-            storage = GraphStorage(graph_dir)
             state["nodes"], state["edges"] = storage.load()
             state["mapper"] = ViewIDMapper(state["nodes"], state["edges"])
             state["name_index"] = {
@@ -48,12 +50,12 @@ def create_app(kb_dir: Path) -> FastAPI:
 
     def get_hotpath() -> dict:
         if state["hotpath"] is None:
-            state["hotpath"] = GraphStorage(graph_dir).load_hotpath()
+            state["hotpath"] = storage.load_hotpath()
         return state["hotpath"]
 
     def get_features() -> list:
         if state["features"] is None:
-            state["features"] = GraphStorage(graph_dir).load_features()
+            state["features"] = storage.load_features()
         return state["features"]
 
     def get_entry_count(manifest: dict) -> int:

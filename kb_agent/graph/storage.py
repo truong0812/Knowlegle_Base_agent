@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from abc import ABC, abstractmethod
 from pathlib import Path
 
 from kb_agent.graph.features import Feature
@@ -8,7 +9,31 @@ from kb_agent.graph.hotpath import HotPathScore
 from kb_agent.models.graph import SymbolEdge, SymbolNode
 
 
-class GraphStorage:
+class ReadOnlyStorage(ABC):
+    """Read-only interface for graph storage.
+
+    Decouples consumers (e.g. the dashboard server) from the concrete
+    ``GraphStorage`` implementation, making it easy to swap backends
+    or inject test doubles.
+    """
+
+    @abstractmethod
+    def load(self) -> tuple[list[SymbolNode], list[SymbolEdge]]:
+        """Load nodes and edges from storage."""
+        ...
+
+    @abstractmethod
+    def load_hotpath(self) -> dict[str, HotPathScore]:
+        """Load hot-path scores from storage."""
+        ...
+
+    @abstractmethod
+    def load_features(self) -> list[Feature]:
+        """Load feature groups from storage."""
+        ...
+
+
+class GraphStorage(ReadOnlyStorage):
     """JSONL + adjacency index storage for the symbol graph."""
 
     def __init__(self, graph_dir: Path) -> None:
