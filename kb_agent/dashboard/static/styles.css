@@ -733,27 +733,6 @@ body {
 
 /* ---- Legend ---- */
 
-#loading {
-    color: #58a6ff;
-    font-size: 16px;
-    left: 50%;
-    position: absolute;
-    top: 50%;
-    transform: translate(-50%, -50%);
-}
-
-.tooltip {
-    background: #1c2128;
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    font-size: 11px;
-    max-width: 300px;
-    padding: 8px;
-    pointer-events: none;
-    position: absolute;
-    z-index: 100;
-}
-
 #legend {
     background: #161b22;
     border: 1px solid #30363d;
@@ -813,26 +792,4 @@ body {
     position: absolute;
     top: 50%;
     transform: translate(-50%, -50%);
-.color-class {
-    background: #58a6ff;
-}
-
-.color-function {
-    background: #3fb950;
-}
-
-.color-method {
-    background: #56d364;
-}
-
-.color-interface {
-    background: #a371f7;
-}
-
-.color-enum {
-    background: #ffa657;
-}
-
-.color-other {
-    background: #8b949e;
 }

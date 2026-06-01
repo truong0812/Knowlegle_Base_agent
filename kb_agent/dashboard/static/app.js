@@ -50,12 +50,6 @@ function escapeHtml(value) {
 function escapeAttribute(value) {
     return escapeHtml(value).replace(/`/g, "&#096;");
 }
-let allNodes = [];
-let allEdges = [];
-let simulation;
-let svg;
-let showHotpath = false;
-let activeEdgeFilter = "";
 
 async function apiFetch(url, timeoutMs = 10000) {
     const controller = new AbortController();
