@@ -1,5 +1,4 @@
 """FastAPI REST API backend for the interactive dashboard."""
-from __future__ import annotations
 
 import orjson
 import logging
@@ -32,7 +31,7 @@ def create_app(kb_dir: Path) -> FastAPI:
     entries_dir = kb_dir / "entries"
 
     # Cache loaded data
-    state: dict = {"mapper": None, "nodes": None, "edges": None, "hotpath": None, "features": None}
+    state: dict = {"mapper": None, "nodes": None, "edges": None, "hotpath": None, "features": None, "name_index": None}
 
     def kb_missing_error(message: str = "Knowledge base not found. Run analyze first.") -> dict:
         return {"code": "missing_kb", "message": message}
@@ -42,6 +41,9 @@ def create_app(kb_dir: Path) -> FastAPI:
             storage = GraphStorage(graph_dir)
             state["nodes"], state["edges"] = storage.load()
             state["mapper"] = ViewIDMapper(state["nodes"], state["edges"])
+            state["name_index"] = {
+                n.name: nid for nid, n in state["mapper"].node_by_id.items()
+            }
         return state["mapper"]
 
     def get_hotpath() -> dict:
@@ -69,6 +71,7 @@ def create_app(kb_dir: Path) -> FastAPI:
         try:
             entry = orjson.loads(arch_path.read_bytes())
         except orjson.JSONDecodeError:
+            logger.warning("Invalid JSON in %s", arch_path)
             return None
         ai = entry.get("ai", {})
         return ai.get("summary") or ai.get("purpose")
@@ -118,8 +121,6 @@ def create_app(kb_dir: Path) -> FastAPI:
             return {"status": "not_initialized"}
         try:
             manifest = orjson.loads(manifest_path.read_bytes())
-        except FileNotFoundError:
-            return {"status": "not_initialized"}
         except orjson.JSONDecodeError as exc:
             raise HTTPException(status_code=500, detail=f"Invalid manifest.json: {exc}") from exc
         mapper = get_mapper()
@@ -209,8 +210,6 @@ def create_app(kb_dir: Path) -> FastAPI:
 
         try:
             manifest = orjson.loads(manifest_path.read_bytes())
-        except FileNotFoundError:
-            return {**empty_payload, "error": kb_missing_error()}
         except orjson.JSONDecodeError as exc:
             raise HTTPException(status_code=500, detail=f"Invalid manifest.json: {exc}") from exc
 
@@ -275,12 +274,11 @@ def create_app(kb_dir: Path) -> FastAPI:
         # Try exact match
         node = mapper.node_by_id.get(node_id)
         if not node:
-            # Try name match
-            for nid, n in mapper.node_by_id.items():
-                if n.name == node_id or nid == node_id:
-                    node = n
-                    node_id = nid
-                    break
+            # Try name match via index
+            nid = state["name_index"].get(node_id)
+            if nid:
+                node = mapper.node_by_id.get(nid)
+                node_id = nid
 
         if not node:
             raise HTTPException(status_code=404, detail="Node not found")

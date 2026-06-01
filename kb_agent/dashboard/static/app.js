@@ -17,16 +17,21 @@ let svg;
 let showHotpath = false;
 let activeEdgeFilter = "";
 
+async function apiFetch(url) {
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`API error: ${response.status} ${response.statusText}`);
+    }
+    return response.json();
+}
+
 async function loadGraph() {
     try {
-        const [nodesRes, edgesRes, statusRes] = await Promise.all([
-            fetch("/api/nodes"),
-            fetch("/api/edges"),
-            fetch("/api/status"),
+        const [nodesData, edgesData, statusData] = await Promise.all([
+            apiFetch("/api/nodes"),
+            apiFetch("/api/edges"),
+            apiFetch("/api/status"),
         ]);
-        const nodesData = await nodesRes.json();
-        const edgesData = await edgesRes.json();
-        const statusData = await statusRes.json();
 
         allNodes = nodesData.nodes;
         allEdges = edgesData.edges;
@@ -160,8 +165,7 @@ async function showDetail(node) {
 
     content.innerHTML = "<p>Loading...</p>";
     try {
-        const response = await fetch(`/api/node/${encodeURIComponent(node.id)}`);
-        const data = await response.json();
+        const data = await apiFetch(`/api/node/${encodeURIComponent(node.id)}`);
 
         let html = `<h2>${escapeHtml(data.name)}</h2>`;
         html += `<div class="meta"><span>${escapeHtml(data.kind)}</span><span>${escapeHtml(data.language)}</span><span>${escapeHtml(data.path)}:${data.line_start}-${data.line_end}</span></div>`;
@@ -234,8 +238,7 @@ document.getElementById("search-input").addEventListener("input", async (event) 
         return;
     }
     try {
-        const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&top_k=20`);
-        const data = await response.json();
+        const data = await apiFetch(`/api/search?q=${encodeURIComponent(query)}&top_k=20`);
         const ids = new Set(data.results.map((result) => result.id));
         d3.selectAll(".node").classed("highlighted", (node) => ids.has(node.id));
     } catch (error) {
@@ -248,8 +251,7 @@ document.getElementById("btn-hotpath").addEventListener("click", async () => {
     document.getElementById("btn-hotpath").classList.toggle("active", showHotpath);
     if (showHotpath) {
         try {
-            const response = await fetch("/api/hotpath");
-            const data = await response.json();
+            const data = await apiFetch("/api/hotpath");
             const hotMap = {};
             data.scores.forEach((score) => {
                 if (score.hotness > 0.3) {
