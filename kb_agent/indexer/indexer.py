@@ -18,8 +18,19 @@ class KBIndexer:
     def _get_model(self):
         if self._model is None:
             from sentence_transformers import SentenceTransformer
-            self._model = SentenceTransformer(self._model_name)
+            self._model = self._load_model(SentenceTransformer, self._model_name)
         return self._model
+
+    @staticmethod
+    def _load_model(cls, model_name: str, retries: int = 2):
+        """Load SentenceTransformer with retry for transient HTTP-client errors."""
+        for attempt in range(retries):
+            try:
+                return cls(model_name)
+            except RuntimeError as exc:
+                if "client has been closed" in str(exc) and attempt < retries - 1:
+                    continue
+                raise
 
     def build_index(
         self,

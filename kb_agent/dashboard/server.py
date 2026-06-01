@@ -434,6 +434,22 @@ def create_app(kb_dir: Path) -> FastAPI:
         except Exception:
             return {"versions": []}
 
+    # --- Chat endpoint ---
+
+    from kb_agent.dashboard.chat import ChatHandler, ChatRequest, ChatResponse
+
+    chat_handler_state: dict = {"handler": None}
+
+    def get_chat_handler() -> ChatHandler:
+        if chat_handler_state["handler"] is None:
+            chat_handler_state["handler"] = ChatHandler(kb_dir)
+        return chat_handler_state["handler"]
+
+    @app.post("/api/chat")
+    def api_chat(request: ChatRequest) -> ChatResponse:
+        handler = get_chat_handler()
+        return handler.handle(request)
+
     @app.get("/api/stats")
     def api_stats():
         mapper = get_mapper()
