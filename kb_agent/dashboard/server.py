@@ -3,6 +3,7 @@
 import orjson
 import logging
 import os
+from collections import Counter
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -79,21 +80,16 @@ def create_app(kb_dir: Path) -> FastAPI:
         return ai.get("summary") or ai.get("purpose")
 
     def top_modules(nodes: list, limit: int = 8) -> list[str]:
-        counts: dict[str, int] = {}
+        modules: list[str] = []
         for node in nodes:
-            path = Path(node.path)
-            parts = path.parts
+            parts = Path(node.path).parts
             if len(parts) >= 2:
-                module = ".".join(parts[:2])
+                modules.append(".".join(parts[:2]))
             elif parts:
-                module = parts[0]
+                modules.append(parts[0])
             else:
-                module = node.path
-            if module:
-                counts[module] = counts.get(module, 0) + 1
-        return [
-            name for name, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
-        ]
+                modules.append(node.path)
+        return [name for name, _ in Counter(modules).most_common(limit)]
 
     def node_detail_for_feature(node_id: str, hotpath: dict) -> dict | None:
         mapper = get_mapper()
@@ -318,7 +314,10 @@ def create_app(kb_dir: Path) -> FastAPI:
         from kb_agent.query.engine import entry_filename
         entry_path = entries_dir / entry_filename(node_id)
         if entry_path.exists():
-            entry_data = orjson.loads(entry_path.read_bytes())
+            try:
+                entry_data = orjson.loads(entry_path.read_bytes())
+            except orjson.JSONDecodeError:
+                logger.warning("Invalid JSON in entry %s", entry_path)
 
         # Hot-path score
         hotpath = get_hotpath()
@@ -438,16 +437,13 @@ def create_app(kb_dir: Path) -> FastAPI:
     @app.get("/api/stats")
     def api_stats():
         mapper = get_mapper()
-        kind_counts: dict[str, int] = {}
-        lang_counts: dict[str, int] = {}
-        for node in state["nodes"]:
-            kind_counts[node.kind.value] = kind_counts.get(node.kind.value, 0) + 1
-            lang_counts[node.language.value] = lang_counts.get(node.language.value, 0) + 1
+        kind_counts = Counter(node.kind.value for node in state["nodes"])
+        lang_counts = Counter(node.language.value for node in state["nodes"])
         return {
             "node_count": len(mapper.node_by_id),
             "edge_count": sum(len(v) for v in mapper.edges_by_source.values()),
-            "by_kind": kind_counts,
-            "by_language": lang_counts,
+            "by_kind": dict(kind_counts),
+            "by_language": dict(lang_counts),
         }
 
     # --- Static files ---
