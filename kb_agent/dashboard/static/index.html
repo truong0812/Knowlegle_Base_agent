@@ -10,22 +10,32 @@
 <body>
     <div id="toolbar">
         <h1>KB Agent</h1>
+        <nav id="main-nav">
+            <a href="#overview" class="nav-tab active" data-view="overview">Overview</a>
+            <a href="#features" class="nav-tab" data-view="features">Features</a>
+            <a href="#graph" class="nav-tab" data-view="graph">Graph</a>
+        </nav>
         <input type="text" id="search-input" placeholder="Search symbols...">
-        <button class="toolbar-btn" id="btn-hotpath">Hot Paths</button>
-        <button class="toolbar-btn" id="btn-reset">Reset View</button>
-        <select id="edge-filter" class="toolbar-btn">
-            <option value="">All Edges</option>
-            <option value="calls">Calls</option>
-            <option value="imports">Imports</option>
-            <option value="contains">Contains</option>
-            <option value="inherits">Inherits</option>
-            <option value="uses_type">Uses Type</option>
-        </select>
+        <div id="graph-controls">
+            <button class="toolbar-btn" id="btn-hotpath">Hot Paths</button>
+            <button class="toolbar-btn" id="btn-reset">Reset View</button>
+            <select id="edge-filter" class="toolbar-btn">
+                <option value="">All Edges</option>
+                <option value="calls">Calls</option>
+                <option value="imports">Imports</option>
+                <option value="contains">Contains</option>
+                <option value="inherits">Inherits</option>
+                <option value="uses_type">Uses Type</option>
+            </select>
+        </div>
         <span id="stats"></span>
     </div>
     <div id="main">
-        <div id="graph-container">
-            <div id="loading">Loading graph...</div>
+        <div id="main-content">
+            <div id="loading">Loading...</div>
+        </div>
+        <div id="graph-container" style="display:none">
+            <div id="graph-loading">Loading graph...</div>
             <div id="legend">
                 <h4>Node Types</h4>
                 <div class="legend-item"><div class="legend-color color-class"></div> class</div>
@@ -39,6 +49,17 @@
         <div id="detail-panel">
             <span class="close-btn" id="close-detail">&times;</span>
             <div id="detail-content"></div>
+        </div>
+        <div id="chat-panel">
+            <div id="chat-header">
+                <h3>Ask about this project</h3>
+            </div>
+            <div id="chat-messages"></div>
+            <div class="suggestions" id="chat-suggestions"></div>
+            <div id="chat-input-area">
+                <input type="text" id="chat-input" placeholder="Ask a question...">
+                <button class="toolbar-btn" id="chat-send">Send</button>
+            </div>
         </div>
     </div>
     <script src="/app.js"></script>
