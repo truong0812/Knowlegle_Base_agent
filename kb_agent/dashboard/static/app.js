@@ -303,140 +303,6 @@ async function renderFeatureDetail(container, featureId) {
 // ---------------------------------------------------------------------------
 
 async function openSymbolPanel(nodeId) {
-async function loadGraph() {
-    try {
-        const [nodesData, edgesData, statusData] = await Promise.all([
-            apiFetch("/api/nodes"),
-            apiFetch("/api/edges"),
-            apiFetch("/api/status"),
-        ]);
-
-        allNodes = nodesData.nodes;
-        allEdges = edgesData.edges;
-        document.getElementById("stats").textContent =
-            `${allNodes.length} nodes | ${allEdges.length} edges | ${statusData.languages?.join(", ") || ""}`;
-        document.getElementById("loading").style.display = "none";
-        renderGraph();
-    } catch (error) {
-        document.getElementById("loading").textContent = `Error loading graph: ${error.message}`;
-    }
-}
-
-function renderGraph() {
-    const container = document.getElementById("graph-container");
-    const width = container.clientWidth;
-    const height = container.clientHeight;
-    d3.select("#graph-container svg").remove();
-
-    svg = d3.select("#graph-container").append("svg").attr("width", width).attr("height", height);
-    const graph = svg.append("g");
-
-    svg.call(d3.zoom().scaleExtent([0.1, 8]).on("zoom", (event) => graph.attr("transform", event.transform)));
-
-    let filteredEdges = allEdges;
-    if (activeEdgeFilter) {
-        filteredEdges = allEdges.filter((edge) => edge.kind === activeEdgeFilter);
-    }
-
-    const nodeIds = new Set(allNodes.map((node) => node.id));
-    const validEdges = filteredEdges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target));
-
-    allNodes.forEach((node) => {
-        node.x = width / 2 + (Math.random() - 0.5) * 200;
-        node.y = height / 2 + (Math.random() - 0.5) * 200;
-    });
-
-    const link = graph
-        .selectAll(".link")
-        .data(validEdges)
-        .join("line")
-        .attr("class", (edge) => `link ${edge.kind}`)
-        .attr("stroke-width", (edge) => Math.max(0.5, edge.confidence * 2));
-
-    const node = graph
-        .selectAll(".node")
-        .data(allNodes)
-        .join("g")
-        .attr("class", "node")
-        .call(d3.drag().on("start", dragStart).on("drag", dragged).on("end", dragEnd));
-
-    node.append("circle")
-        .attr("r", 6)
-        .attr("fill", (item) => KIND_COLORS[item.kind] || "#8b949e")
-        .attr("stroke", (item) => KIND_COLORS[item.kind] || "#8b949e")
-        .attr("stroke-opacity", 0.3);
-
-    node.append("text")
-        .attr("dx", 10)
-        .attr("dy", 4)
-        .text((item) => (item.name.length > 20 ? `${item.name.slice(0, 20)}...` : item.name));
-
-    node.on("click", (event, item) => {
-        event.stopPropagation();
-        showDetail(item);
-    });
-    node.on("mouseenter", (event, item) => {
-        link.attr("stroke-opacity", (edge) => {
-            const sourceId = typeof edge.source === "object" ? edge.source.id : edge.source;
-            const targetId = typeof edge.target === "object" ? edge.target.id : edge.target;
-            return sourceId === item.id || targetId === item.id ? 0.8 : 0.08;
-        });
-        node.attr("opacity", (candidate) => {
-            const connected = validEdges.some((edge) => {
-                const sourceId = typeof edge.source === "object" ? edge.source.id : edge.source;
-                const targetId = typeof edge.target === "object" ? edge.target.id : edge.target;
-                return (
-                    (sourceId === candidate.id || targetId === candidate.id) &&
-                    (sourceId === item.id || targetId === item.id)
-                );
-            });
-            return candidate.id === item.id || connected ? 1 : 0.2;
-        });
-    });
-    node.on("mouseleave", () => {
-        link.attr("stroke-opacity", 0.4);
-        node.attr("opacity", 1);
-    });
-
-    simulation = d3
-        .forceSimulation(allNodes)
-        .force("link", d3.forceLink(validEdges).id((item) => item.id).distance(60).strength(0.3))
-        .force("charge", d3.forceManyBody().strength(-80))
-        .force("center", d3.forceCenter(width / 2, height / 2))
-        .force("collision", d3.forceCollide(12));
-
-    simulation.on("tick", () => {
-        link
-            .attr("x1", (edge) => edge.source.x)
-            .attr("y1", (edge) => edge.source.y)
-            .attr("x2", (edge) => edge.target.x)
-            .attr("y2", (edge) => edge.target.y);
-        node.attr("transform", (item) => `translate(${item.x},${item.y})`);
-    });
-
-    function dragStart(event, item) {
-        if (!event.active) {
-            simulation.alphaTarget(0.3).restart();
-        }
-        item.fx = item.x;
-        item.fy = item.y;
-    }
-
-    function dragged(event, item) {
-        item.fx = event.x;
-        item.fy = event.y;
-    }
-
-    function dragEnd(event, item) {
-        if (!event.active) {
-            simulation.alphaTarget(0);
-        }
-        item.fx = null;
-        item.fy = null;
-    }
-}
-
-async function showDetail(node) {
     const panel = document.getElementById("detail-panel");
     const content = document.getElementById("detail-content");
     panel.classList.add("visible");
@@ -459,11 +325,6 @@ async function showDetail(node) {
         html += `</div>`;
 
         html += `<h2>${escapeHtml(data.name)}</h2>`;
-    content.innerHTML = "<p>Loading...</p>";
-    try {
-        const data = await apiFetch(`/api/node/${encodeURIComponent(node.id)}`);
-
-        let html = `<h2>${escapeHtml(data.name)}</h2>`;
         html += `<div class="meta"><span>${escapeHtml(data.kind)}</span><span>${escapeHtml(data.language)}</span><span>${escapeHtml(data.path)}:${data.line_start}-${data.line_end}</span></div>`;
 
         if (data.signature) {
@@ -485,7 +346,6 @@ async function showDetail(node) {
         }
 
         if (data.connections && data.connections.length) {
-        if (data.connections.length) {
             html += `<div class="section"><h3>Connections (${data.connections.length})</h3>`;
             data.connections.forEach((connection) => {
                 const name = connection.direction === "outgoing" ? connection.target_name : connection.source_name;
@@ -501,11 +361,6 @@ async function showDetail(node) {
             element.addEventListener("click", () => {
                 const nid = element.dataset.nodeId;
                 if (nid) openSymbolPanel(nid);
-                const nodeId = element.dataset.nodeId;
-                const nextNode = allNodes.find((item) => item.id === nodeId);
-                if (nextNode) {
-                    showDetail(nextNode);
-                }
             });
         });
     } catch (error) {
@@ -948,47 +803,3 @@ window.addEventListener("hashchange", onRouteChange);
 // ---------------------------------------------------------------------------
 
 onRouteChange();
-        // Search highlighting is best-effort in the graph UI.
-    }
-});
-
-document.getElementById("btn-hotpath").addEventListener("click", async () => {
-    showHotpath = !showHotpath;
-    document.getElementById("btn-hotpath").classList.toggle("active", showHotpath);
-    if (showHotpath) {
-        try {
-            const data = await apiFetch("/api/hotpath");
-            const hotMap = {};
-            data.scores.forEach((score) => {
-                if (score.hotness > 0.3) {
-                    hotMap[score.node_id] = score.hotness;
-                }
-            });
-            d3.selectAll(".node")
-                .classed("hot", (node) => node.id in hotMap)
-                .select("circle")
-                .attr("r", (node) => (node.id in hotMap ? 6 + hotMap[node.id] * 8 : 6));
-        } catch (error) {
-            // Keep the graph usable if hotpath data is unavailable.
-        }
-    } else {
-        d3.selectAll(".node").classed("hot", false).select("circle").attr("r", 6);
-    }
-});
-
-document.getElementById("btn-reset").addEventListener("click", () => {
-    d3.selectAll(".node").classed("highlighted", false).classed("hot", false).select("circle").attr("r", 6);
-    document.getElementById("search-input").value = "";
-    document.getElementById("btn-hotpath").classList.remove("active");
-    showHotpath = false;
-    if (simulation) {
-        simulation.alpha(0.3).restart();
-    }
-});
-
-document.getElementById("edge-filter").addEventListener("change", (event) => {
-    activeEdgeFilter = event.target.value;
-    renderGraph();
-});
-
-loadGraph();
