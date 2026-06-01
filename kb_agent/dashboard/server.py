@@ -109,7 +109,12 @@ def create_app(kb_dir: Path) -> FastAPI:
         manifest_path = kb_dir / "manifest.json"
         if not manifest_path.exists():
             return {"status": "not_initialized"}
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {"status": "not_initialized"}
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=500, detail=f"Invalid manifest.json: {exc}") from exc
         mapper = get_mapper()
         manifest["graph"] = {
             "nodes": len(mapper.node_by_id),
@@ -197,6 +202,8 @@ def create_app(kb_dir: Path) -> FastAPI:
 
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {**empty_payload, "error": kb_missing_error()}
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=500, detail=f"Invalid manifest.json: {exc}") from exc
 

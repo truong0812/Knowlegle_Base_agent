@@ -162,6 +162,17 @@ class TestOverviewApi:
         assert data["stats"] is None
         assert data["top_features"] == []
 
+    def test_overview_returns_500_for_invalid_manifest_json(self, tmp_path: Path):
+        kb = tmp_path / "repo" / ".kb"
+        kb.mkdir(parents=True)
+        (kb / "manifest.json").write_text("{invalid json", encoding="utf-8")
+        client = TestClient(create_app(kb))
+
+        resp = client.get("/api/overview")
+
+        assert resp.status_code == 500
+        assert "Invalid manifest.json" in resp.json()["detail"]
+
     def test_overview_falls_back_for_hotpath_node_missing_from_graph(self, tmp_path: Path):
         kb = _build_kb(tmp_path / "repo")
         GraphStorage(kb / "graph").save_hotpath({
