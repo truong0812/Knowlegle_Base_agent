@@ -1,4 +1,4 @@
-"""Deterministic Phase 1 API helpers for the learning platform."""
+"""Learning platform API helpers."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -9,7 +9,7 @@ from pathlib import Path
 import orjson
 
 from kb_agent.graph.storage import GraphStorage, ReadOnlyStorage
-from kb_agent.learning.citations import citation_from_node
+from kb_agent.learning.explainer import TopicExplainer, cache_payload
 from kb_agent.learning.models import (
     DashboardResponse,
     KbStatus,
@@ -67,6 +67,8 @@ class LearningApi:
         self._features_cache: list | None = None
         self._progress_cache: UserProgress | None = None
         self._tutor_cache: Tutor | None = None
+        self._topic_explainer_cache: TopicExplainer | None = None
+        self._topic_cache: dict[str, dict] | None = None
 
     def dashboard(self) -> DashboardResponse:
         manifest = self._load_manifest()
@@ -222,7 +224,8 @@ class LearningApi:
         }
 
     def topic(self, topic_id: str) -> TopicPage:
-        node = self._node_by_id_or_name(topic_id)
+        explainer = self._topic_explainer()
+        node = explainer.resolve(topic_id)
         if node is not None:
             self.accept_progress_event(
                 ProgressEvent(
@@ -235,66 +238,23 @@ class LearningApi:
                 (item for item in progress.viewed_topics if item.get("topic_id") == node.id),
                 {},
             )
-            return TopicPage(
-                id=node.id,
-                type=node.kind.value,
-                title=node.name,
-                summary=f"{node.name} is a {node.kind.value} in {node.path}.",
-                explanation=(
-                    f"{node.name} belongs to {node.path}. Phase 1 returns a stable "
-                    "contract; later phases will generate richer natural-language explanations."
-                ),
-                why_it_matters="This topic is part of the source graph and can anchor learning context.",
-                examples=[node.signature] if node.signature else [],
-                related_symbols=[],
-                citations=[citation_from_node(node)],
+            page = explainer.explain(
+                topic_id,
                 progress=TopicProgress(
                     viewed=True,
                     last_viewed_at=topic_progress.get("viewed_at"),
                 ),
-                suggested_questions=[
-                    f"What does {node.name} do?",
-                    f"What calls {node.name}?",
-                    f"What should I learn before {node.name}?",
-                ],
-                graph_context={
-                    "nodes": [{"id": node.id, "name": node.name, "kind": node.kind.value}],
-                    "relationships": [],
-                },
+                cached=self._load_topic_cache().get(node.id),
             )
+            if node.id not in self._load_topic_cache():
+                self._store_topic_cache(page)
+            return page
 
-        warning = WarningInfo(code="topic_not_found", message="Topic was not found in the current graph.")
-        return TopicPage(
-            id=topic_id,
-            type="unknown",
-            title=topic_id,
-            summary="Topic not found.",
-            explanation="This topic is not available in the current knowledge graph.",
-            why_it_matters="Generate or refresh the knowledge base to make this topic available.",
-            warnings=[warning],
-        )
+        return explainer.explain(topic_id)
 
     def search_topics(self, query: str) -> dict:
-        q = query.strip().lower()
-        if not q:
-            return {"query": query, "results": []}
-        results = []
-        for node in self._nodes():
-            haystack = f"{node.name} {node.path} {node.kind.value}".lower()
-            if not q or q in haystack:
-                score = 1.0 if q and q in node.name.lower() else 0.75
-                results.append(
-                    TopicSearchResult(
-                        id=node.id,
-                        type=node.kind.value,
-                        title=node.name,
-                        summary=f"{node.kind.value} in {node.path}",
-                        score=score,
-                        matched_fields=["title" if q in node.name.lower() else "summary"],
-                    )
-                )
-        results.sort(key=lambda item: (-item.score, item.title, item.id))
-        return {"query": query, "results": [item.model_dump() for item in results[:20]]}
+        results = self._topic_explainer().search(query)
+        return {"query": query, "results": [item.model_dump() for item in results]}
 
     def tutor(self, request: TutorRequest) -> TutorResponse:
         return self._tutor_engine().answer(request)
@@ -539,6 +499,40 @@ class LearningApi:
             self._tutor_cache = default_tutor_factory(**kwargs)
         return self._tutor_cache
 
+    def _topic_explainer(self) -> TopicExplainer:
+        if self._topic_explainer_cache is not None:
+            return self._topic_explainer_cache
+        nodes, edges = self._graph() or ([], [])
+        self._topic_explainer_cache = TopicExplainer(
+            nodes=nodes,
+            edges=edges,
+            status=self.kb_status(),
+        )
+        return self._topic_explainer_cache
+
+    def _load_topic_cache(self) -> dict[str, dict]:
+        if self._topic_cache is not None:
+            return self._topic_cache
+        cache_path = self.learning_dir / "topics.json"
+        if not cache_path.exists():
+            self._topic_cache = {}
+            return self._topic_cache
+        try:
+            payload = orjson.loads(cache_path.read_bytes())
+        except orjson.JSONDecodeError:
+            self._topic_cache = {}
+            return self._topic_cache
+        self._topic_cache = payload if isinstance(payload, dict) else {}
+        return self._topic_cache
+
+    def _store_topic_cache(self, page: TopicPage) -> None:
+        cache = self._load_topic_cache()
+        # TODO(Phase 7): cap this generated topic cache and evict least-recently used entries.
+        cache[page.id] = cache_payload(page)
+        self.learning_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = self.learning_dir / "topics.json"
+        cache_path.write_bytes(orjson.dumps(cache, option=orjson.OPT_INDENT_2))
+
     def _load_manifest(self) -> dict | None:
         if self._manifest_cache is not _UNSET:
             return self._manifest_cache  # type: ignore[return-value]
@@ -602,12 +596,6 @@ class LearningApi:
             if edge.source in node_id_set or edge.target in node_id_set
         ]
         return filtered_nodes, filtered_edges
-
-    def _node_by_id_or_name(self, topic_id: str) -> SymbolNode | None:
-        for node in self._nodes():
-            if node.id == topic_id or node.name == topic_id:
-                return node
-        return None
 
     def _save_progress(self, progress: UserProgress) -> None:
         self.learning_dir.mkdir(parents=True, exist_ok=True)
