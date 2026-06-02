@@ -1,6 +1,7 @@
 """Topic page explanation and search helpers for the learning platform."""
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 import re
@@ -44,6 +45,19 @@ class TopicCandidate:
     aliases: set[str]
 
 
+@dataclass(frozen=True)
+class TopicSearchDocument:
+    """Precomputed searchable fields for a topic candidate."""
+
+    candidate: TopicCandidate
+    name: str
+    path: str
+    kind: str
+    signature: str
+    aliases: set[str]
+    tokens_by_field: dict[str, set[str]]
+
+
 class TopicExplainer:
     """Build learner-friendly topic pages from graph nodes and edges."""
 
@@ -59,6 +73,13 @@ class TopicExplainer:
         self.status = status
         self.node_by_id = {node.id: node for node in self.nodes}
         self.candidates = [_candidate(node) for node in self.nodes]
+        self.alias_index = _alias_index(self.candidates)
+        (
+            self.search_documents,
+            self.token_index,
+            self.prefix_index,
+            self.ngram_index,
+        ) = _build_search_indexes(self.candidates)
 
     def explain(
         self,
@@ -134,37 +155,44 @@ class TopicExplainer:
         )
 
     def search(self, query: str) -> list[TopicSearchResult]:
-        """Search topics by title, path, kind, signature, and related aliases."""
+        """Search topics by title, path, kind, signature, and aliases.
+
+        The explainer builds a small inverted index once at construction time,
+        then scores only matching candidate documents. This keeps query latency
+        bounded by the number of likely matches instead of the full graph size.
+        """
 
         q = query.strip().lower()
         if not q:
             return []
         tokens = _tokens(q)
+        candidate_ids = self._search_candidate_ids(q, tokens)
+        if not candidate_ids:
+            return []
+
         results: list[TopicSearchResult] = []
-        for candidate in self.candidates:
-            node = candidate.node
+        for candidate_id in candidate_ids:
+            document = self.search_documents[candidate_id]
+            node = document.candidate.node
             matched_fields: list[str] = []
             score = 0.0
-            name = node.name.lower()
-            path = node.path.lower()
-            signature = (node.signature or "").lower()
 
-            if q == name:
+            if q == document.name:
                 score += 1.2
                 matched_fields.append("title")
-            elif q in name or any(token in name for token in tokens):
+            elif q in document.name or tokens & document.tokens_by_field["title"]:
                 score += 1.0
                 matched_fields.append("title")
-            if q in path or any(token in path for token in tokens):
+            if q in document.path or tokens & document.tokens_by_field["summary"]:
                 score += 0.55
                 matched_fields.append("summary")
-            if q in node.kind.value:
+            if q in document.kind or tokens & document.tokens_by_field["type"]:
                 score += 0.35
                 matched_fields.append("type")
-            if signature and (q in signature or any(token in signature for token in tokens)):
+            if document.signature and (q in document.signature or tokens & document.tokens_by_field["signature"]):
                 score += 0.3
                 matched_fields.append("signature")
-            if any(q in alias for alias in candidate.aliases):
+            if any(q in alias for alias in document.aliases):
                 score += 0.25
                 matched_fields.append("alias")
 
@@ -183,6 +211,29 @@ class TopicExplainer:
         results.sort(key=lambda item: (-item.score, item.title.lower(), item.id))
         return results[:MAX_TOPIC_SEARCH_RESULTS]
 
+    def _search_candidate_ids(self, query: str, tokens: set[str]) -> set[int]:
+        candidate_ids: set[int] = set()
+        alias_match = self.alias_index.get(query)
+        if alias_match is not None:
+            candidate_ids.add(alias_match)
+
+        for token in tokens:
+            candidate_ids.update(self.token_index.get(token, set()))
+            candidate_ids.update(self.prefix_index.get(token, set()))
+
+        if query:
+            candidate_ids.update(self.token_index.get(query, set()))
+            candidate_ids.update(self.prefix_index.get(query, set()))
+        if len(query) >= 3:
+            gram_matches = [
+                self.ngram_index.get(gram, set())
+                for gram in _ngrams(query)
+            ]
+            gram_matches = [matches for matches in gram_matches if matches]
+            if gram_matches:
+                candidate_ids.update(set.intersection(*gram_matches))
+        return candidate_ids
+
     def resolve(self, topic_id: str) -> SymbolNode | None:
         """Resolve a topic by exact id, name, path/name alias, or URL-safe id."""
 
@@ -190,9 +241,9 @@ class TopicExplainer:
         if normalized in self.node_by_id:
             return self.node_by_id[normalized]
         normalized_lower = normalized.lower()
-        for candidate in self.candidates:
-            if normalized_lower in candidate.aliases:
-                return candidate.node
+        candidate_id = self.alias_index.get(normalized_lower)
+        if candidate_id is not None:
+            return self.search_documents[candidate_id].candidate.node
         return None
 
     def _relationships_for(self, node_id: str) -> tuple[list[SymbolEdge], list[SymbolEdge]]:
@@ -237,6 +288,70 @@ def _candidate(node: SymbolNode) -> TopicCandidate:
         _slug(f"{node.path}-{node.name}"),
     }
     return TopicCandidate(node=node, aliases=aliases)
+
+
+def _alias_index(candidates: Sequence[TopicCandidate]) -> dict[str, int]:
+    index: dict[str, int] = {}
+    for candidate_id, candidate in enumerate(candidates):
+        for alias in candidate.aliases:
+            index.setdefault(alias, candidate_id)
+    return index
+
+
+def _build_search_indexes(
+    candidates: Sequence[TopicCandidate],
+) -> tuple[
+    list[TopicSearchDocument],
+    dict[str, set[int]],
+    dict[str, set[int]],
+    dict[str, set[int]],
+]:
+    documents = [_search_document(candidate) for candidate in candidates]
+    token_index: dict[str, set[int]] = defaultdict(set)
+    prefix_index: dict[str, set[int]] = defaultdict(set)
+    ngram_index: dict[str, set[int]] = defaultdict(set)
+
+    for candidate_id, document in enumerate(documents):
+        searchable_text = " ".join([
+            document.name,
+            document.path,
+            document.kind,
+            document.signature,
+            *document.aliases,
+        ])
+        all_tokens = set().union(*document.tokens_by_field.values())
+        for token in all_tokens:
+            token_index[token].add(candidate_id)
+            for prefix in _prefixes(token):
+                prefix_index[prefix].add(candidate_id)
+        for gram in _ngrams(searchable_text):
+            ngram_index[gram].add(candidate_id)
+
+    return documents, dict(token_index), dict(prefix_index), dict(ngram_index)
+
+
+def _search_document(candidate: TopicCandidate) -> TopicSearchDocument:
+    node = candidate.node
+    name = node.name.lower()
+    path = node.path.lower()
+    kind = node.kind.value.lower()
+    signature = (node.signature or "").lower()
+    aliases = {alias.lower() for alias in candidate.aliases}
+    return TopicSearchDocument(
+        candidate=candidate,
+        name=name,
+        path=path,
+        kind=kind,
+        signature=signature,
+        aliases=aliases,
+        tokens_by_field={
+            "title": _tokens(name),
+            "summary": _tokens(path),
+            "type": _tokens(kind),
+            "signature": _tokens(signature),
+            "alias": set().union(*(_tokens(alias) for alias in aliases)) if aliases else set(),
+        },
+    )
 
 
 def _summary(node: SymbolNode) -> str:
@@ -374,6 +489,23 @@ def _tokens(text: str) -> set[str]:
         token
         for token in re.findall(r"[a-zA-Z0-9_]+", text.lower())
         if len(token) >= 2 and token not in STOPWORDS
+    }
+
+
+def _prefixes(token: str) -> set[str]:
+    return {
+        token[:index]
+        for index in range(2, len(token) + 1)
+    }
+
+
+def _ngrams(text: str, size: int = 3) -> set[str]:
+    normalized = re.sub(r"\s+", " ", text.lower())
+    if len(normalized) < size:
+        return set()
+    return {
+        normalized[index : index + size]
+        for index in range(0, len(normalized) - size + 1)
     }
 
 

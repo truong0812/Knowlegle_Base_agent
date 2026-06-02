@@ -126,6 +126,9 @@ def test_topic_search_matches_path_kind_and_signature(tmp_path: Path):
     assert "retrieve" in titles
     assert "QueryPlanner" in titles
 
+    by_substring = client.get("/api/learning/topics/search?q=triev").json()
+    assert by_substring["results"][0]["title"] == "retrieve"
+
 
 def test_topic_page_missing_graph_degrades_with_warning(tmp_path: Path):
     kb = tmp_path / "repo" / ".kb"

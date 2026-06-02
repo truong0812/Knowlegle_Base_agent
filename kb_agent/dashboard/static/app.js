@@ -57,15 +57,37 @@ async function apiFetch(url, timeoutMs = 10000) {
     try {
         const response = await fetch(url, { signal: controller.signal });
         if (!response.ok) {
-            const detail = response.headers.get("content-type")?.includes("json")
-                ? (await response.json()).detail || response.statusText
-                : response.statusText;
-            throw new Error(`API error: ${response.status} ${detail}`);
+            const detail = await responseDetail(response);
+            const error = new Error(`API error: ${response.status} ${formatErrorDetail(detail)}`);
+            error.status = response.status;
+            error.detail = detail;
+            error.code = typeof detail === "object" && detail !== null ? detail.code : null;
+            throw error;
         }
         return response.json();
     } finally {
         clearTimeout(timer);
     }
+}
+
+async function responseDetail(response) {
+    if (!response.headers.get("content-type")?.includes("json")) {
+        return response.statusText;
+    }
+    try {
+        const payload = await response.json();
+        return payload.detail || payload;
+    } catch (error) {
+        return response.statusText;
+    }
+}
+
+function formatErrorDetail(detail) {
+    if (typeof detail === "string") return detail;
+    if (detail && typeof detail === "object") {
+        return detail.message || detail.code || JSON.stringify(detail);
+    }
+    return "Request failed";
 }
 
 const apiClient = {
@@ -74,11 +96,11 @@ const apiClient = {
     },
 };
 
-async function fetchData(url) {
+async function fetchData(url, client = apiClient) {
     if (typeof url !== "string" || !url.startsWith("/api/")) {
         throw new Error("fetchData expects an internal /api/ URL.");
     }
-    return apiClient.fetch(url);
+    return client.fetch(url);
 }
 
 function formatNumber(n) {
@@ -377,8 +399,17 @@ async function renderTopicDetail(container, topicId) {
         container.innerHTML = html;
         ChatPanel.updateDefaultSuggestions();
     } catch (error) {
-        container.innerHTML = `<div class="error-card"><p>Error loading topic: ${escapeHtml(error.message)}</p><button class="back-btn" onclick="navigate('#topics')">&larr; Back to Topics</button></div>`;
+        container.innerHTML = `<div class="error-card"><p>${escapeHtml(topicErrorMessage(error))}</p><button class="back-btn" onclick="navigate('#topics')">&larr; Back to Topics</button></div>`;
     }
+}
+
+function topicErrorMessage(error) {
+    const parts = [`Error loading topic: ${error.message || "Request failed"}`];
+    if (error.status) parts.push(`Status: ${error.status}`);
+    if (error.code) parts.push(`Code: ${error.code}`);
+    const detail = formatErrorDetail(error.detail);
+    if (detail && detail !== error.message) parts.push(`Detail: ${detail}`);
+    return parts.join(" | ");
 }
 
 function renderCitationSection(citations) {
