@@ -23,6 +23,7 @@ from kb_agent.learning.models import (
     UserProgress,
     WarningInfo,
 )
+from kb_agent.learning.tutor import Tutor, default_tutor_factory
 
 __all__ = [
     "Citation",
@@ -45,5 +46,7 @@ __all__ = [
     "TutorRequest",
     "TutorResponse",
     "UserProgress",
+    "Tutor",
+    "default_tutor_factory",
     "WarningInfo",
 ]

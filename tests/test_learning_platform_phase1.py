@@ -12,6 +12,8 @@ from kb_agent.graph.features import Feature
 from kb_agent.graph.hotpath import HotPathScore
 from kb_agent.graph.storage import GraphStorage
 from kb_agent.learning.api import LearningApi
+from kb_agent.learning.models import KbStatus, ProjectSummary, TutorRequest
+from kb_agent.learning.tutor import LearningTutor
 from kb_agent.models.entry import Language, SymbolKind
 from kb_agent.models.graph import EdgeKind, SymbolEdge, SymbolNode
 
@@ -31,6 +33,25 @@ class FakeStorage:
 
     def load_features(self) -> list[Feature]:
         return []
+
+
+class FakeStreamingTutorClient:
+    model_name = "fake-stream"
+
+    def __init__(self) -> None:
+        self.complete_called = False
+        self.stream_called = False
+        self.prompt = ""
+
+    def complete(self, prompt: str, context):
+        self.complete_called = True
+        raise AssertionError("streaming path should not call complete")
+
+    def stream(self, prompt: str, context):
+        self.stream_called = True
+        self.prompt = prompt
+        yield "streamed "
+        yield "answer"
 
 
 def _node(
@@ -155,6 +176,66 @@ class TestLearningDashboardContract:
         assert status.node_count == 1
         assert storage.load_count == 1
 
+    def test_learning_api_accepts_injected_tutor_factory(self, tmp_path: Path):
+        node = _node("repo/src/retrieval.py::retrieve", "retrieve")
+        storage = FakeStorage([node])
+        captured_kwargs = []
+        kb = tmp_path / "repo" / ".kb"
+        kb.mkdir(parents=True)
+        (kb / "manifest.json").write_text(
+            json.dumps({"source_repo": str(tmp_path / "repo"), "stats": {"total_entries": 1}}),
+            encoding="utf-8",
+        )
+
+        def tutor_factory(**kwargs):
+            captured_kwargs.append(kwargs)
+            return LearningTutor(**kwargs)
+
+        api = LearningApi(kb, storage=storage, tutor_factory=tutor_factory)
+        response = api.tutor(TutorRequest(message="Explain retrieve"))
+
+        assert response.graph_context["nodes"][0]["name"] == "retrieve"
+        assert captured_kwargs[0]["nodes"] == [node]
+        assert isinstance(captured_kwargs[0]["status"], KbStatus)
+
+    def test_learning_api_falls_back_when_tutor_factory_fails(self, tmp_path: Path):
+        node = _node("repo/src/retrieval.py::retrieve", "retrieve")
+        storage = FakeStorage([node])
+        kb = tmp_path / "repo" / ".kb"
+        kb.mkdir(parents=True)
+        (kb / "manifest.json").write_text(
+            json.dumps({"source_repo": str(tmp_path / "repo"), "stats": {"total_entries": 1}}),
+            encoding="utf-8",
+        )
+
+        def tutor_factory(**kwargs):
+            raise RuntimeError("factory failed")
+
+        api = LearningApi(kb, storage=storage, tutor_factory=tutor_factory)
+        response = api.tutor(TutorRequest(message="Explain retrieve"))
+
+        assert response.graph_context["nodes"][0]["name"] == "retrieve"
+        assert response.recommended_next_steps[0].type == "open_topic"
+
+    def test_learning_api_falls_back_when_tutor_factory_returns_none(self, tmp_path: Path):
+        node = _node("repo/src/retrieval.py::retrieve", "retrieve")
+        storage = FakeStorage([node])
+        kb = tmp_path / "repo" / ".kb"
+        kb.mkdir(parents=True)
+        (kb / "manifest.json").write_text(
+            json.dumps({"source_repo": str(tmp_path / "repo"), "stats": {"total_entries": 1}}),
+            encoding="utf-8",
+        )
+
+        def tutor_factory(**kwargs):
+            return None
+
+        api = LearningApi(kb, storage=storage, tutor_factory=tutor_factory)
+        response = api.tutor(TutorRequest(message="Explain retrieve"))
+
+        assert response.graph_context["nodes"][0]["name"] == "retrieve"
+        assert response.recommended_next_steps[0].type == "open_topic"
+
 
 class TestLearningPathContracts:
     def test_paths_list_returns_starter_paths(self, learning_client: TestClient):
@@ -248,7 +329,7 @@ class TestTutorProgressAndRecommendations:
         resp = learning_client.post(
             "/api/learning/tutor/chat",
             json={
-                "message": "What should I learn first?",
+                "message": "What should I learn first about retrieve?",
                 "stream": False,
                 "context": {"page": "dashboard"},
                 "learner": {"level": "beginner"},
@@ -257,9 +338,108 @@ class TestTutorProgressAndRecommendations:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert "Phase 1" in data["answer"]
-        assert data["recommended_next_steps"][0]["type"] == "start_path"
+        assert isinstance(data["answer"], str)
+        assert len(data["answer"]) > 40
+        assert data["citations"][0]["path"] == "src/retrieval.py"
+        assert data["recommended_next_steps"][0]["type"] == "open_topic"
+        assert data["graph_context"]["nodes"][0]["name"] == "retrieve"
+        assert data["warnings"][0]["code"] == "llm_unavailable"
+
+    def test_tutor_chat_uses_topic_context_and_relationships(self, learning_client: TestClient):
+        resp = learning_client.post(
+            "/api/learning/tutor/chat",
+            json={
+                "message": "Explain this simply",
+                "context": {"page": "topic", "topic_id": "retrieve"},
+                "learner": {"level": "beginner"},
+            },
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["summary"] == "Answered with context from retrieve."
+        assert data["related_topics"] == []
+        assert data["graph_context"]["relationships"][0]["kind"] == "calls"
+        assert data["suggested_questions"][0] == "Can you explain retrieve more simply?"
+
+    def test_tutor_chat_stream_returns_sse_events(self, learning_client: TestClient):
+        with learning_client.stream(
+            "POST",
+            "/api/learning/tutor/chat?stream=true",
+            json={
+                "message": "Explain retrieve",
+                "context": {"page": "topic", "topic_id": "retrieve"},
+            },
+        ) as resp:
+            body = "".join(resp.iter_text())
+
+        assert resp.status_code == 200
+        assert "event: status" in body
+        assert "event: token" in body
+        assert "event: citation" in body
+        assert "event: done" in body
+
+    def test_tutor_chat_stream_request_flag_returns_sse_events(self, learning_client: TestClient):
+        with learning_client.stream(
+            "POST",
+            "/api/learning/tutor/chat",
+            json={
+                "message": "Explain retrieve",
+                "stream": True,
+                "context": {"page": "topic", "topic_id": "retrieve"},
+            },
+        ) as resp:
+            body = "".join(resp.iter_text())
+
+        assert resp.status_code == 200
+        assert "event: token" in body
+        assert "event: done" in body
+
+    def test_tutor_stream_uses_llm_stream_client(self):
+        node = _node("repo/src/retrieval.py::retrieve", "retrieve")
+        client = FakeStreamingTutorClient()
+        tutor = LearningTutor(
+            nodes=[node],
+            edges=[],
+            status=KbStatus(available=True, node_count=1),
+            project_summary=ProjectSummary(project_name="repo"),
+            llm_client=client,
+        )
+
+        events = list(tutor.stream_events(
+            request=TutorRequest(
+                message="Explain retrieve",
+                context={"page": "topic", "topic_id": "retrieve"},
+            )
+        ))
+
+        assert client.stream_called is True
+        assert client.complete_called is False
+        assert "Prompt version: tutor_answer.v1" in client.prompt
+        assert '"nodes":' in client.prompt
+        assert [event["event"] for event in events].count("token") == 2
+        assert events[-1]["data"]["answer"] == "streamed answer"
+
+    def test_tutor_empty_graph_fallback_is_structured(self, tmp_path: Path):
+        kb = tmp_path / "repo" / ".kb"
+        kb.mkdir(parents=True)
+        client = TestClient(create_app(kb))
+
+        resp = client.post(
+            "/api/learning/tutor/chat",
+            json={"message": "", "context": {"page": "dashboard"}},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["citations"] == []
         assert data["graph_context"] == {"nodes": [], "relationships": []}
+        assert data["recommended_next_steps"][0]["type"] == "start_path"
+        assert {warning["code"] for warning in data["warnings"]} >= {
+            "missing_kb",
+            "missing_graph_context",
+            "llm_unavailable",
+        }
 
     def test_progress_contract_and_event_acceptance(self, learning_client: TestClient):
         progress_resp = learning_client.get("/api/learning/progress")

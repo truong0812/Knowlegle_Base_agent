@@ -1,7 +1,9 @@
 """Deterministic Phase 1 API helpers for the learning platform."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
+import logging
 from pathlib import Path
 
 import orjson
@@ -28,10 +30,14 @@ from kb_agent.learning.models import (
     UserProgress,
     WarningInfo,
 )
+from kb_agent.learning.tutor import Tutor, default_tutor_factory
 from kb_agent.models.graph import SymbolEdge, SymbolNode
 
 
+logger = logging.getLogger(__name__)
+
 GraphCache = tuple[list[SymbolNode], list[SymbolEdge]]
+TutorFactory = Callable[..., Tutor]
 _UNSET = object()
 
 
@@ -43,17 +49,24 @@ class LearningApi:
     synthesis without changing endpoint shapes.
     """
 
-    def __init__(self, kb_dir: Path, storage: ReadOnlyStorage | None = None):
+    def __init__(
+        self,
+        kb_dir: Path,
+        storage: ReadOnlyStorage | None = None,
+        tutor_factory: TutorFactory | None = None,
+    ):
         self.kb_dir = kb_dir.resolve()
         self.graph_dir = self.kb_dir / "graph"
         self.entries_dir = self.kb_dir / "entries"
         self.learning_dir = self.kb_dir / "learning"
         self.storage = storage or GraphStorage(self.graph_dir)
+        self._tutor_factory = tutor_factory or default_tutor_factory
         self._manifest_cache: dict | None | object = _UNSET
         self._graph_cache: GraphCache | None | object = _UNSET
         self._kb_status_cache: KbStatus | None = None
         self._features_cache: list | None = None
         self._progress_cache: UserProgress | None = None
+        self._tutor_cache: Tutor | None = None
 
     def dashboard(self) -> DashboardResponse:
         manifest = self._load_manifest()
@@ -284,34 +297,10 @@ class LearningApi:
         return {"query": query, "results": [item.model_dump() for item in results[:20]]}
 
     def tutor(self, request: TutorRequest) -> TutorResponse:
-        warnings: list[WarningInfo] = []
-        if not self.kb_status().available:
-            warnings.append(
-                WarningInfo(
-                    code="missing_kb",
-                    message="Knowledge base not found. Tutor is using deterministic fallback.",
-                )
-            )
-        context_label = request.context.topic_id or request.context.lesson_id or request.context.path_id
-        answer = "I can help you learn this repository from the knowledge base."
-        if context_label:
-            answer += f" Current context: {context_label}."
-        answer += " Phase 1 provides the stable tutor response shape; natural synthesis arrives in Phase 2."
+        return self._tutor_engine().answer(request)
 
-        return TutorResponse(
-            answer=answer,
-            summary="Deterministic Phase 1 tutor fallback.",
-            key_concepts=["learning_path", "topic", "citation"],
-            suggested_questions=[
-                "What should I learn first?",
-                "Show me the important modules.",
-                "Explain the current topic in simple language.",
-            ],
-            recommended_next_steps=[
-                NextAction(type="start_path", label="Start with architecture", target_id="architecture-overview")
-            ],
-            warnings=warnings,
-        )
+    def tutor_stream_events(self, request: TutorRequest):
+        return self._tutor_engine().stream_events(request)
 
     def progress(self) -> UserProgress:
         if self._progress_cache is not None:
@@ -528,6 +517,27 @@ class LearningApi:
         if paths:
             return NextAction(type="start_path", label="Start with architecture", target_id=paths[0].id)
         return NextAction(type="ask_tutor", label="Ask the AI tutor", target_id=None)
+
+    def _tutor_engine(self) -> Tutor:
+        if self._tutor_cache is not None:
+            return self._tutor_cache
+        nodes, edges = self._graph() or ([], [])
+        kwargs = {
+            "nodes": nodes,
+            "edges": edges,
+            "status": self.kb_status(),
+            "project_summary": self.project_summary(),
+        }
+        factory = self._tutor_factory or default_tutor_factory
+        try:
+            self._tutor_cache = factory(**kwargs)
+        except Exception:
+            logger.exception("Learning tutor factory failed; falling back to default tutor.")
+            self._tutor_cache = default_tutor_factory(**kwargs)
+        if self._tutor_cache is None:
+            logger.error("Learning tutor factory returned None; falling back to default tutor.")
+            self._tutor_cache = default_tutor_factory(**kwargs)
+        return self._tutor_cache
 
     def _load_manifest(self) -> dict | None:
         if self._manifest_cache is not _UNSET:

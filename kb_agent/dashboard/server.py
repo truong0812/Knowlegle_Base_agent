@@ -8,17 +8,35 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from kb_agent.graph.storage import GraphStorage, ReadOnlyStorage
 from kb_agent.learning import LearningApi
 from kb_agent.learning.models import ProgressEvent, TutorRequest
+from kb_agent.learning.tutor import sse_encode
 from kb_agent.views.base import ViewIDMapper
 
 logger = logging.getLogger(__name__)
 
 
-def create_app(kb_dir: Path) -> FastAPI:
+def _safe_tutor_stream(learning_api, request: TutorRequest):
+    """Wrap the tutor event generator with structured error handling."""
+    try:
+        for event in learning_api.tutor_stream_events(request):
+            yield sse_encode(event)
+    except Exception:
+        logger.exception("Tutor streaming failed.")
+        yield sse_encode({
+            "event": "error",
+            "data": {
+                "code": "tutor_stream_error",
+                "message": "Tutor streaming failed. Please try again.",
+            },
+        })
+
+
+def create_app(kb_dir: Path, tutor_factory=None) -> FastAPI:
     """Create FastAPI app serving dashboard UI and REST API."""
     app = FastAPI(title="KB Agent Dashboard", version="1.0.0")
 
@@ -458,7 +476,10 @@ def create_app(kb_dir: Path) -> FastAPI:
 
     def get_learning_api() -> LearningApi:
         if learning_api_state["api"] is None:
-            learning_api_state["api"] = LearningApi(kb_dir)
+            kwargs = {}
+            if tutor_factory is not None:
+                kwargs["tutor_factory"] = tutor_factory
+            learning_api_state["api"] = LearningApi(kb_dir, **kwargs)
         return learning_api_state["api"]
 
     @app.get("/api/learning/dashboard")
@@ -490,8 +511,21 @@ def create_app(kb_dir: Path) -> FastAPI:
         return get_learning_api().topic(topic_id).model_dump()
 
     @app.post("/api/learning/tutor/chat")
-    def api_learning_tutor_chat(request: TutorRequest):
-        return get_learning_api().tutor(request).model_dump()
+    def api_learning_tutor_chat(request: TutorRequest, stream: bool = Query(False)):
+        learning_api = get_learning_api()
+        if stream or request.stream:
+            return StreamingResponse(
+                _safe_tutor_stream(learning_api, request),
+                media_type="text/event-stream",
+            )
+        try:
+            return learning_api.tutor(request).model_dump()
+        except Exception:
+            logger.exception("Tutor request failed.")
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "tutor_error", "message": "Tutor request failed. Please try again."},
+            )
 
     @app.get("/api/learning/progress")
     def api_learning_progress():
