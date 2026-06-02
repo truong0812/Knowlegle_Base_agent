@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 import json
+import logging
 from pathlib import Path
 import re
 from typing import Protocol
@@ -21,6 +22,8 @@ from kb_agent.learning.models import (
 )
 from kb_agent.models.graph import SymbolEdge, SymbolNode
 
+
+logger = logging.getLogger(__name__)
 
 PROMPT_VERSION = "tutor_answer.v1"
 PROMPT_TEMPLATE_PATH = Path(__file__).parent / "prompts" / f"{PROMPT_VERSION}.txt"
@@ -79,7 +82,7 @@ class LearningTutor:
         self.edges = list(edges)
         self.status = status
         self.project_summary = project_summary
-        self.llm_client = llm_client
+        self.llm_client = llm_client or None
 
     def answer(self, request: TutorRequest) -> TutorResponse:
         """Return a non-streaming tutor response."""
@@ -88,11 +91,15 @@ class LearningTutor:
         if self.llm_client is not None:
             try:
                 return self.llm_client.complete(self._prompt(request, context), context)
-            except Exception:
+            except Exception as exc:
+                logger.exception("Tutor provider completion failed; falling back to deterministic answer.")
                 context.warnings.append(
                     WarningInfo(
                         code="llm_error",
-                        message="Tutor provider failed; returned deterministic fallback.",
+                        message=(
+                            "Tutor provider failed; returned deterministic fallback. "
+                            f"Error type: {type(exc).__name__}."
+                        ),
                     )
                 )
 
@@ -114,11 +121,15 @@ class LearningTutor:
             try:
                 yield from self._stream_llm_response(request, context)
                 return
-            except Exception:
+            except Exception as exc:
+                logger.exception("Tutor provider streaming failed; falling back to deterministic answer.")
                 context.warnings.append(
                     WarningInfo(
                         code="llm_stream_error",
-                        message="Tutor provider streaming failed; returned deterministic fallback.",
+                        message=(
+                            "Tutor provider streaming failed; returned deterministic fallback. "
+                            f"Error type: {type(exc).__name__}."
+                        ),
                     )
                 )
 

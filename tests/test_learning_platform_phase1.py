@@ -176,6 +176,28 @@ class TestLearningDashboardContract:
         assert status.node_count == 1
         assert storage.load_count == 1
 
+    def test_learning_api_accepts_injected_tutor_factory(self, tmp_path: Path):
+        node = _node("repo/src/retrieval.py::retrieve", "retrieve")
+        storage = FakeStorage([node])
+        captured_kwargs = []
+        kb = tmp_path / "repo" / ".kb"
+        kb.mkdir(parents=True)
+        (kb / "manifest.json").write_text(
+            json.dumps({"source_repo": str(tmp_path / "repo"), "stats": {"total_entries": 1}}),
+            encoding="utf-8",
+        )
+
+        def tutor_factory(**kwargs):
+            captured_kwargs.append(kwargs)
+            return LearningTutor(**kwargs)
+
+        api = LearningApi(kb, storage=storage, tutor_factory=tutor_factory)
+        response = api.tutor(TutorRequest(message="Explain retrieve"))
+
+        assert response.graph_context["nodes"][0]["name"] == "retrieve"
+        assert captured_kwargs[0]["nodes"] == [node]
+        assert isinstance(captured_kwargs[0]["status"], KbStatus)
+
 
 class TestLearningPathContracts:
     def test_paths_list_returns_starter_paths(self, learning_client: TestClient):

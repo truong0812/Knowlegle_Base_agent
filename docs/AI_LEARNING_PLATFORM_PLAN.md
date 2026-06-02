@@ -32,7 +32,7 @@ Completed:
 
 Verification:
 
-- `pytest -q` -> `373 passed, 3 warnings`
+- `pytest -q` -> `374 passed, 3 warnings`
 - `ruff check kb_agent\learning\api.py kb_agent\learning\tutor.py kb_agent\dashboard\server.py tests\test_learning_platform_phase1.py` -> passed
 
 Next phase:

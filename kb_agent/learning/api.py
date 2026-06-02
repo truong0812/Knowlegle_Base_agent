@@ -1,6 +1,7 @@
 """Deterministic Phase 1 API helpers for the learning platform."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from kb_agent.models.graph import SymbolEdge, SymbolNode
 
 
 GraphCache = tuple[list[SymbolNode], list[SymbolEdge]]
+TutorFactory = Callable[..., LearningTutor]
 _UNSET = object()
 
 
@@ -44,12 +46,18 @@ class LearningApi:
     synthesis without changing endpoint shapes.
     """
 
-    def __init__(self, kb_dir: Path, storage: ReadOnlyStorage | None = None):
+    def __init__(
+        self,
+        kb_dir: Path,
+        storage: ReadOnlyStorage | None = None,
+        tutor_factory: TutorFactory | None = None,
+    ):
         self.kb_dir = kb_dir.resolve()
         self.graph_dir = self.kb_dir / "graph"
         self.entries_dir = self.kb_dir / "entries"
         self.learning_dir = self.kb_dir / "learning"
         self.storage = storage or GraphStorage(self.graph_dir)
+        self._tutor_factory = tutor_factory or LearningTutor
         self._manifest_cache: dict | None | object = _UNSET
         self._graph_cache: GraphCache | None | object = _UNSET
         self._kb_status_cache: KbStatus | None = None
@@ -515,7 +523,7 @@ class LearningApi:
         edges: list[SymbolEdge] = []
         if graph is not None:
             nodes, edges = graph
-        self._tutor_cache = LearningTutor(
+        self._tutor_cache = self._tutor_factory(
             nodes=nodes,
             edges=edges,
             status=self.kb_status(),
