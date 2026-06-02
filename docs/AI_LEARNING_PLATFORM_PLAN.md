@@ -7,7 +7,7 @@
 
 Updated: 2026-06-02
 
-Phase 1 is complete.
+Phase 1 and Phase 2 are complete.
 
 Completed:
 
@@ -21,15 +21,23 @@ Completed:
 - `LearningApi` supports injected read-only graph storage.
 - Graph, manifest, status, feature, and progress reads are cached per `LearningApi` instance.
 - Phase 1 contract tests added.
+- `kb_agent.learning.tutor` natural-language tutor module created.
+- Tutor context builder selects relevant graph nodes and supporting relationships.
+- Tutor responses attach citations when graph context is available.
+- Tutor responses include suggested questions, related topics, and next steps.
+- Tutor prompt is loaded from `kb_agent/learning/prompts/tutor_answer.v1.txt` and includes serialized graph context.
+- Deterministic no-LLM fallback returns structured learner-friendly answers.
+- `/api/learning/tutor/chat?stream=true` returns Server-Sent Events.
+- Phase 2 tutor behavior and streaming tests added.
 
 Verification:
 
-- `pytest -q` -> `368 passed, 3 warnings`
-- `ruff check kb_agent\learning tests\test_learning_platform_phase1.py kb_agent\dashboard\server.py` -> passed
+- `pytest -q` -> `373 passed, 3 warnings`
+- `ruff check kb_agent\learning\api.py kb_agent\learning\tutor.py kb_agent\dashboard\server.py tests\test_learning_platform_phase1.py` -> passed
 
 Next phase:
 
-- Phase 2: Natural-Language Tutor.
+- Phase 3: Topic Pages.
 
 ## 1. Product Vision
 

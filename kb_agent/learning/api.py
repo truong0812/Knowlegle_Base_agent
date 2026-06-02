@@ -28,6 +28,7 @@ from kb_agent.learning.models import (
     UserProgress,
     WarningInfo,
 )
+from kb_agent.learning.tutor import LearningTutor
 from kb_agent.models.graph import SymbolEdge, SymbolNode
 
 
@@ -54,6 +55,7 @@ class LearningApi:
         self._kb_status_cache: KbStatus | None = None
         self._features_cache: list | None = None
         self._progress_cache: UserProgress | None = None
+        self._tutor_cache: LearningTutor | None = None
 
     def dashboard(self) -> DashboardResponse:
         manifest = self._load_manifest()
@@ -284,34 +286,10 @@ class LearningApi:
         return {"query": query, "results": [item.model_dump() for item in results[:20]]}
 
     def tutor(self, request: TutorRequest) -> TutorResponse:
-        warnings: list[WarningInfo] = []
-        if not self.kb_status().available:
-            warnings.append(
-                WarningInfo(
-                    code="missing_kb",
-                    message="Knowledge base not found. Tutor is using deterministic fallback.",
-                )
-            )
-        context_label = request.context.topic_id or request.context.lesson_id or request.context.path_id
-        answer = "I can help you learn this repository from the knowledge base."
-        if context_label:
-            answer += f" Current context: {context_label}."
-        answer += " Phase 1 provides the stable tutor response shape; natural synthesis arrives in Phase 2."
+        return self._tutor_engine().answer(request)
 
-        return TutorResponse(
-            answer=answer,
-            summary="Deterministic Phase 1 tutor fallback.",
-            key_concepts=["learning_path", "topic", "citation"],
-            suggested_questions=[
-                "What should I learn first?",
-                "Show me the important modules.",
-                "Explain the current topic in simple language.",
-            ],
-            recommended_next_steps=[
-                NextAction(type="start_path", label="Start with architecture", target_id="architecture-overview")
-            ],
-            warnings=warnings,
-        )
+    def tutor_stream_events(self, request: TutorRequest):
+        return self._tutor_engine().stream_events(request)
 
     def progress(self) -> UserProgress:
         if self._progress_cache is not None:
@@ -528,6 +506,22 @@ class LearningApi:
         if paths:
             return NextAction(type="start_path", label="Start with architecture", target_id=paths[0].id)
         return NextAction(type="ask_tutor", label="Ask the AI tutor", target_id=None)
+
+    def _tutor_engine(self) -> LearningTutor:
+        if self._tutor_cache is not None:
+            return self._tutor_cache
+        graph = self._graph()
+        nodes: list[SymbolNode] = []
+        edges: list[SymbolEdge] = []
+        if graph is not None:
+            nodes, edges = graph
+        self._tutor_cache = LearningTutor(
+            nodes=nodes,
+            edges=edges,
+            status=self.kb_status(),
+            project_summary=self.project_summary(),
+        )
+        return self._tutor_cache
 
     def _load_manifest(self) -> dict | None:
         if self._manifest_cache is not _UNSET:
