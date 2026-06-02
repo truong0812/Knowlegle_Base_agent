@@ -11,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from kb_agent.graph.storage import GraphStorage, ReadOnlyStorage
+from kb_agent.learning import LearningApi
+from kb_agent.learning.models import ProgressEvent, TutorRequest
 from kb_agent.views.base import ViewIDMapper
 
 logger = logging.getLogger(__name__)
@@ -449,6 +451,59 @@ def create_app(kb_dir: Path) -> FastAPI:
     def api_chat(request: ChatRequest) -> ChatResponse:
         handler = get_chat_handler()
         return handler.handle(request)
+
+    # --- Learning platform Phase 1 endpoints ---
+
+    learning_api_state: dict = {"api": None}
+
+    def get_learning_api() -> LearningApi:
+        if learning_api_state["api"] is None:
+            learning_api_state["api"] = LearningApi(kb_dir)
+        return learning_api_state["api"]
+
+    @app.get("/api/learning/dashboard")
+    def api_learning_dashboard():
+        return get_learning_api().dashboard().model_dump()
+
+    @app.get("/api/learning/paths")
+    def api_learning_paths():
+        paths = get_learning_api().paths()
+        return {"paths": [path.model_dump() for path in paths]}
+
+    @app.get("/api/learning/paths/{path_id:path}")
+    def api_learning_path_detail(path_id: str):
+        detail = get_learning_api().path_detail(path_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Learning path not found")
+        return detail.model_dump()
+
+    @app.post("/api/learning/paths/{path_id:path}/lessons/{lesson_id:path}/complete")
+    def api_learning_complete_lesson(path_id: str, lesson_id: str):
+        return get_learning_api().complete_lesson(path_id, lesson_id)
+
+    @app.get("/api/learning/topics/search")
+    def api_learning_topic_search(q: str = Query("")):
+        return get_learning_api().search_topics(q)
+
+    @app.get("/api/learning/topics/{topic_id:path}")
+    def api_learning_topic(topic_id: str):
+        return get_learning_api().topic(topic_id).model_dump()
+
+    @app.post("/api/learning/tutor/chat")
+    def api_learning_tutor_chat(request: TutorRequest):
+        return get_learning_api().tutor(request).model_dump()
+
+    @app.get("/api/learning/progress")
+    def api_learning_progress():
+        return get_learning_api().progress().model_dump()
+
+    @app.post("/api/learning/progress/events")
+    def api_learning_progress_events(event: ProgressEvent):
+        return get_learning_api().accept_progress_event(event)
+
+    @app.get("/api/learning/recommendations")
+    def api_learning_recommendations():
+        return get_learning_api().recommendations()
 
     @app.get("/api/stats")
     def api_stats():
