@@ -6,7 +6,7 @@ from pathlib import Path
 
 import orjson
 
-from kb_agent.graph.storage import GraphStorage
+from kb_agent.graph.storage import GraphStorage, ReadOnlyStorage
 from kb_agent.learning.citations import citation_from_node
 from kb_agent.learning.models import (
     DashboardResponse,
@@ -43,12 +43,12 @@ class LearningApi:
     synthesis without changing endpoint shapes.
     """
 
-    def __init__(self, kb_dir: Path):
+    def __init__(self, kb_dir: Path, storage: ReadOnlyStorage | None = None):
         self.kb_dir = kb_dir.resolve()
         self.graph_dir = self.kb_dir / "graph"
         self.entries_dir = self.kb_dir / "entries"
         self.learning_dir = self.kb_dir / "learning"
-        self.storage = GraphStorage(self.graph_dir)
+        self.storage = storage or GraphStorage(self.graph_dir)
         self._manifest_cache: dict | None | object = _UNSET
         self._graph_cache: GraphCache | None | object = _UNSET
         self._kb_status_cache: KbStatus | None = None
@@ -562,22 +562,36 @@ class LearningApi:
         ai = entry.get("ai", {})
         return ai.get("summary") or ai.get("purpose")
 
-    def _nodes(self) -> list[SymbolNode]:
-        graph = self._graph()
+    def _nodes(self, node_ids: list[str] | None = None) -> list[SymbolNode]:
+        graph = self._graph(node_ids)
         if graph is None:
             return []
         nodes, _ = graph
         return sorted(nodes, key=lambda node: (node.path, node.name, node.id))
 
-    def _graph(self) -> GraphCache | None:
+    def _graph(self, node_ids: list[str] | None = None) -> GraphCache | None:
         if self._graph_cache is not _UNSET:
-            return self._graph_cache  # type: ignore[return-value]
-        try:
-            self._graph_cache = self.storage.load()
-        except FileNotFoundError:
-            self._graph_cache = None
+            graph = self._graph_cache  # type: ignore[assignment]
+        else:
+            try:
+                graph = self.storage.load()
+            except FileNotFoundError:
+                graph = None
+            self._graph_cache = graph
+
+        if graph is None:
             return None
-        return self._graph_cache
+        if not node_ids:
+            return graph
+
+        node_id_set = set(node_ids)
+        nodes, edges = graph
+        filtered_nodes = [node for node in nodes if node.id in node_id_set]
+        filtered_edges = [
+            edge for edge in edges
+            if edge.source in node_id_set or edge.target in node_id_set
+        ]
+        return filtered_nodes, filtered_edges
 
     def _node_by_id_or_name(self, topic_id: str) -> SymbolNode | None:
         for node in self._nodes():
