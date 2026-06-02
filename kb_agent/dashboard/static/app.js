@@ -57,15 +57,50 @@ async function apiFetch(url, timeoutMs = 10000) {
     try {
         const response = await fetch(url, { signal: controller.signal });
         if (!response.ok) {
-            const detail = response.headers.get("content-type")?.includes("json")
-                ? (await response.json()).detail || response.statusText
-                : response.statusText;
-            throw new Error(`API error: ${response.status} ${detail}`);
+            const detail = await responseDetail(response);
+            const error = new Error(`API error: ${response.status} ${formatErrorDetail(detail)}`);
+            error.status = response.status;
+            error.detail = detail;
+            error.code = typeof detail === "object" && detail !== null ? detail.code : null;
+            throw error;
         }
         return response.json();
     } finally {
         clearTimeout(timer);
     }
+}
+
+async function responseDetail(response) {
+    if (!response.headers.get("content-type")?.includes("json")) {
+        return response.statusText;
+    }
+    try {
+        const payload = await response.json();
+        return payload.detail || payload;
+    } catch (error) {
+        return response.statusText;
+    }
+}
+
+function formatErrorDetail(detail) {
+    if (typeof detail === "string") return detail;
+    if (detail && typeof detail === "object") {
+        return detail.message || detail.code || JSON.stringify(detail);
+    }
+    return "Request failed";
+}
+
+const apiClient = {
+    fetch(url, options = {}) {
+        return apiFetch(url, options.timeoutMs || 10000);
+    },
+};
+
+async function fetchData(url, client = apiClient) {
+    if (typeof url !== "string" || !url.startsWith("/api/")) {
+        throw new Error("fetchData expects an internal /api/ URL.");
+    }
+    return client.fetch(url);
 }
 
 function formatNumber(n) {
@@ -83,6 +118,10 @@ function parseHash() {
     if (parts[0] === "features" && parts.length > 1) {
         return { view: "feature-detail", featureId: parts.slice(1).join("/") };
     }
+    if (parts[0] === "topics" && parts.length > 1) {
+        return { view: "topic-detail", topicId: decodeURIComponent(parts.slice(1).join("/")) };
+    }
+    if (parts[0] === "topics") return { view: "topics" };
     if (parts[0] === "features") return { view: "features" };
     if (parts[0] === "graph") return { view: "graph" };
     if (parts[0] === "node" && parts.length > 1) {
@@ -101,42 +140,62 @@ function onRouteChange() {
 
     // Update nav tabs
     document.querySelectorAll(".nav-tab").forEach((tab) => {
-        tab.classList.toggle("active", tab.dataset.view === route.view || (tab.dataset.view === "features" && route.view === "feature-detail"));
+        tab.classList.toggle(
+            "active",
+            tab.dataset.view === route.view ||
+                (tab.dataset.view === "features" && route.view === "feature-detail") ||
+                (tab.dataset.view === "topics" && route.view === "topic-detail")
+        );
     });
 
-    // Toggle graph controls
-    document.getElementById("graph-controls").style.display = route.view === "graph" ? "flex" : "none";
-
-    // Toggle main areas
-    const mainContent = document.getElementById("main-content");
-    const graphContainer = document.getElementById("graph-container");
-
-    if (route.view === "graph") {
-        mainContent.style.display = "none";
-        graphContainer.style.display = "block";
-        if (!state.graphLoaded) {
-            GraphView.loadData();
-        } else {
-            GraphView.render();
-        }
-    } else {
-        mainContent.style.display = "block";
-        graphContainer.style.display = "none";
-        renderCurrentView(route);
-    }
+    renderRouteShell(route);
 
     // Update suggestions when view changes
     ChatPanel.updateDefaultSuggestions();
 }
 
-function renderCurrentView(route) {
-    const container = document.getElementById("main-content");
+function renderRouteShell(route) {
+    document.getElementById("graph-controls").style.display = route.view === "graph" ? "flex" : "none";
+
+    const mainContent = document.getElementById("main-content");
+    const graphContainer = document.getElementById("graph-container");
+
+    if (route.view === "graph") {
+        renderGraphRoute(mainContent, graphContainer);
+    } else {
+        renderContentRoute(mainContent, graphContainer, route);
+    }
+}
+
+function renderGraphRoute(mainContent, graphContainer) {
+    mainContent.style.display = "none";
+    graphContainer.style.display = "block";
+    if (!state.graphLoaded) {
+        GraphView.loadData();
+    } else {
+        GraphView.render();
+    }
+}
+
+function renderContentRoute(mainContent, graphContainer, route) {
+    mainContent.style.display = "block";
+    graphContainer.style.display = "none";
+    renderCurrentView(route, mainContent);
+}
+
+function renderCurrentView(route, container) {
     switch (route.view) {
         case "overview":
             renderOverview(container);
             break;
         case "features":
             renderFeatures(container);
+            break;
+        case "topics":
+            renderTopics(container);
+            break;
+        case "topic-detail":
+            renderTopicDetail(container, route.topicId);
             break;
         case "feature-detail":
             state.currentFeatureId = route.featureId;
@@ -213,6 +272,7 @@ async function renderOverview(container) {
         // Action buttons
         html += `<div class="action-buttons overview-actions">`;
         html += `<button class="action-btn primary" onclick="navigate('#graph')">Start with Architecture</button>`;
+        html += `<button class="action-btn primary" onclick="navigate('#topics')">Explore Topics</button>`;
         html += `<button class="action-btn primary" onclick="navigate('#features')">Explore Features</button>`;
         html += `<button class="action-btn primary" onclick="ChatPanel.focus()">Ask about this project</button>`;
         html += `</div>`;
@@ -221,6 +281,184 @@ async function renderOverview(container) {
     } catch (error) {
         container.innerHTML = `<div class="error-card"><p>Error loading overview: ${escapeHtml(error.message)}</p></div>`;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Topic Views
+// ---------------------------------------------------------------------------
+
+async function renderTopics(container) {
+    container.innerHTML = '<div class="loading-text">Loading topics...</div>';
+    try {
+        const data = await fetchData("/api/learning/dashboard");
+        const recommended = data.recommended_topics || [];
+
+        let html = '<div class="topic-header">';
+        html += '<h2 class="view-title">Topics</h2>';
+        html += '<div class="topic-search-row">';
+        html += '<input type="text" id="topic-search-input" placeholder="Search topics, symbols, or files...">';
+        html += '<button class="action-btn primary" id="topic-search-btn">Search</button>';
+        html += '</div></div>';
+        html += '<div id="topic-search-results">';
+
+        if (recommended.length > 0) {
+            html += '<div class="topic-grid">';
+            recommended.forEach((topic) => {
+                html += renderTopicCard(topic);
+            });
+            html += '</div>';
+        } else {
+            html += '<div class="overview-card"><h3>No Topics Found</h3><p>No graph topics are available yet. Generate or refresh the knowledge base first.</p></div>';
+        }
+        html += '</div>';
+        container.innerHTML = html;
+
+        const input = document.getElementById("topic-search-input");
+        if (input) input.focus();
+    } catch (error) {
+        container.innerHTML = `<div class="error-card"><p>Error loading topics: ${escapeHtml(error.message)}</p></div>`;
+    }
+}
+
+async function searchTopics(query) {
+    const resultsEl = document.getElementById("topic-search-results");
+    if (!resultsEl) return;
+    resultsEl.innerHTML = '<div class="loading-text">Searching topics...</div>';
+    try {
+        const data = await fetchData(`/api/learning/topics/search?q=${encodeURIComponent(query)}`);
+        if (!data.results || data.results.length === 0) {
+            resultsEl.innerHTML = '<div class="overview-card"><h3>No Matches</h3><p>Try a symbol name, file path, or module keyword.</p></div>';
+            return;
+        }
+        let html = '<div class="topic-grid">';
+        data.results.forEach((topic) => {
+            html += renderTopicCard(topic);
+        });
+        html += '</div>';
+        resultsEl.innerHTML = html;
+    } catch (error) {
+        resultsEl.innerHTML = `<div class="error-card"><p>Error searching topics: ${escapeHtml(error.message)}</p></div>`;
+    }
+}
+
+function renderTopicCard(topic) {
+    return `<div class="topic-card" onclick="navigate('#topics/${encodeURIComponent(topic.id)}')">
+        <div class="topic-card-title">${escapeHtml(topic.title)}</div>
+        <div class="topic-card-meta">${escapeHtml(topic.type)} &middot; score ${Math.round((topic.score || 0) * 100)}%</div>
+        <p>${escapeHtml(topic.summary)}</p>
+    </div>`;
+}
+
+async function renderTopicDetail(container, topicId) {
+    container.innerHTML = '<div class="loading-text">Loading topic...</div>';
+    try {
+        const data = await fetchData(`/api/learning/topics/${encodeURIComponent(topicId)}`);
+        state.currentNodeId = data.id;
+
+        let html = '<div class="topic-detail">';
+        html += `<button class="back-btn" onclick="navigate('#topics')">&larr; Back to Topics</button>`;
+        html += '<div class="topic-title-row">';
+        html += `<div><h2>${escapeHtml(data.title)}</h2><div class="meta"><span>${escapeHtml(data.type)}</span></div></div>`;
+        html += `<button class="action-btn primary" onclick="ChatPanel.sendFromButton('Explain ${escapeAttribute(data.title)}')">Ask tutor</button>`;
+        html += '</div>';
+
+        if (data.warnings && data.warnings.length > 0) {
+            html += '<div class="warning-strip">';
+            data.warnings.forEach((warning) => {
+                html += `<div>${escapeHtml(warning.message)}</div>`;
+            });
+            html += '</div>';
+        }
+
+        html += `<div class="overview-card"><h3>Summary</h3><p>${escapeHtml(data.summary)}</p></div>`;
+        html += `<div class="overview-card"><h3>Explanation</h3><p>${escapeHtml(data.explanation)}</p></div>`;
+        html += `<div class="overview-card"><h3>Why It Matters</h3><p>${escapeHtml(data.why_it_matters)}</p></div>`;
+
+        if (data.examples && data.examples.length > 0) {
+            html += '<div class="overview-card"><h3>Examples</h3>';
+            data.examples.forEach((example) => {
+                html += `<pre>${escapeHtml(example)}</pre>`;
+            });
+            html += '</div>';
+        }
+
+        html += renderCitationSection(data.citations || []);
+        html += renderTopicLinkSection("Prerequisites", data.prerequisites || []);
+        html += renderTopicLinkSection("Related Topics", data.related_topics || [], data.related_symbols || []);
+        html += renderGraphNeighborhood(data.graph_context || { nodes: [], relationships: [] });
+
+        if (data.suggested_questions && data.suggested_questions.length > 0) {
+            html += '<div class="overview-card"><h3>Suggested Questions</h3><div class="suggestions inline-suggestions">';
+            data.suggested_questions.forEach((question) => {
+                html += `<span class="suggestion-chip" onclick="ChatPanel.sendFromButton('${escapeAttribute(question)}')">${escapeHtml(question)}</span>`;
+            });
+            html += '</div></div>';
+        }
+
+        html += '</div>';
+        container.innerHTML = html;
+        ChatPanel.updateDefaultSuggestions();
+    } catch (error) {
+        container.innerHTML = `<div class="error-card"><p>${escapeHtml(topicErrorMessage(error))}</p><button class="back-btn" onclick="navigate('#topics')">&larr; Back to Topics</button></div>`;
+    }
+}
+
+function topicErrorMessage(error) {
+    const parts = [`Error loading topic: ${error.message || "Request failed"}`];
+    if (error.status) parts.push(`Status: ${error.status}`);
+    if (error.code) parts.push(`Code: ${error.code}`);
+    const detail = formatErrorDetail(error.detail);
+    if (detail && detail !== error.message) parts.push(`Detail: ${detail}`);
+    return parts.join(" | ");
+}
+
+function renderCitationSection(citations) {
+    if (!citations.length) {
+        return '<div class="overview-card"><h3>Source References</h3><p>No source citations are available for this topic.</p></div>';
+    }
+    let html = '<div class="overview-card"><h3>Source References</h3><div class="citation-list">';
+    citations.forEach((citation) => {
+        html += `<button class="citation-card" onclick="handleCitationClick('${escapeAttribute(citation.node_id || "")}', '${escapeAttribute(citation.path || "")}', ${citation.line_start || 0}, ${citation.line_end || 0})">
+            <span>${escapeHtml(citation.label)}</span>
+            <small>${escapeHtml(citation.path || "")}${citation.line_start ? `:${citation.line_start}-${citation.line_end}` : ""}</small>
+        </button>`;
+    });
+    html += '</div></div>';
+    return html;
+}
+
+function renderTopicLinkSection(title, ids, labels) {
+    if (!ids.length) return "";
+    let html = `<div class="overview-card"><h3>${escapeHtml(title)}</h3><div class="tags">`;
+    ids.forEach((id, index) => {
+        const label = labels && labels[index] ? labels[index] : id;
+        html += `<span class="tag clickable-tag" onclick="navigate('#topics/${encodeURIComponent(id)}')">${escapeHtml(label)}</span>`;
+    });
+    html += '</div></div>';
+    return html;
+}
+
+function renderGraphNeighborhood(graphContext) {
+    const nodes = graphContext.nodes || [];
+    const relationships = graphContext.relationships || [];
+    if (!nodes.length && !relationships.length) return "";
+    let html = '<div class="overview-card"><h3>Graph Neighborhood</h3>';
+    if (nodes.length) {
+        html += '<div class="tags topic-node-tags">';
+        nodes.forEach((node) => {
+            html += `<span class="tag clickable-tag" onclick="navigate('#topics/${encodeURIComponent(node.id)}')">${escapeHtml(node.name)}</span>`;
+        });
+        html += '</div>';
+    }
+    if (relationships.length) {
+        html += '<div class="relationship-list">';
+        relationships.forEach((rel) => {
+            html += `<div class="relationship-item">${escapeHtml(rel.source_name)} <span>${escapeHtml(rel.kind)}</span> ${escapeHtml(rel.target_name)}</div>`;
+        });
+        html += '</div>';
+    }
+    html += '</div>';
+    return html;
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +556,7 @@ async function openSymbolPanel(nodeId) {
 
         // Action buttons
         html += `<div class="action-buttons">`;
+        html += `<button class="action-btn" onclick="navigate('#topics/${encodeURIComponent(data.id)}')">Open topic</button>`;
         html += `<button class="action-btn" onclick="ChatPanel.sendFromButton('Giải thích ${escapeAttribute(data.name)}')">Explain</button>`;
         html += `<button class="action-btn" onclick="ChatPanel.sendFromButton('${escapeAttribute(data.name)} gọi những gì?')">Trace calls</button>`;
         html += `<button class="action-btn" onclick="ChatPanel.sendFromButton('Ảnh hưởng nếu sửa ${escapeAttribute(data.name)}?')">Impact</button>`;
@@ -732,6 +971,10 @@ const ChatPanel = {
 // Handle citation clicks
 function handleCitationClick(nodeId, path, lineStart, lineEnd) {
     if (nodeId) {
+        if (state.activeView === "topic-detail") {
+            navigate(`#topics/${encodeURIComponent(nodeId)}`);
+            return;
+        }
         openSymbolPanel(nodeId);
     } else if (path) {
         openSourceSnippet(path, lineStart, lineEnd);
@@ -742,22 +985,20 @@ function handleCitationClick(nodeId, path, lineStart, lineEnd) {
 // Event Listeners
 // ---------------------------------------------------------------------------
 
-// Close detail panel
-function escapeHtml(value) {
-    return String(value)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-}
-
-function escapeAttribute(value) {
-    return escapeHtml(value).replace(/`/g, "&#096;");
-}
-
 document.getElementById("close-detail").addEventListener("click", () => {
     document.getElementById("detail-panel").classList.remove("visible");
+});
+
+// Topic search uses delegation because the topic view is re-rendered by the hash router.
+document.addEventListener("click", (event) => {
+    if (event.target?.id !== "topic-search-btn") return;
+    const input = document.getElementById("topic-search-input");
+    searchTopics(input?.value || "");
+});
+
+document.addEventListener("keydown", (event) => {
+    if (event.target?.id !== "topic-search-input" || event.key !== "Enter") return;
+    searchTopics(event.target.value);
 });
 
 // Search

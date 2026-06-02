@@ -7,7 +7,7 @@
 
 Updated: 2026-06-02
 
-Phase 1 and Phase 2 are complete.
+Phase 1, Phase 2, and Phase 3 are complete.
 
 Completed:
 
@@ -29,15 +29,23 @@ Completed:
 - Deterministic no-LLM fallback returns structured learner-friendly answers.
 - `/api/learning/tutor/chat?stream=true` returns Server-Sent Events.
 - Phase 2 tutor behavior and streaming tests added.
+- `kb_agent.learning.explainer` topic explainer module created.
+- Topic pages now include learner-friendly explanations, why-it-matters text, examples, citations, prerequisites, related topics, and graph neighborhood context.
+- Topic search now scores title, path, type, signature, and aliases.
+- Topic page responses are cached in `.kb/learning/topics.json`.
+- Dashboard UI includes a Topics route with search, topic cards, citation cards, related topic links, graph neighborhood, and ask-about-topic actions.
+- Phase 3 topic explainer, search, cache, and degradation tests added.
 
 Verification:
 
-- `pytest -q` -> `376 passed, 3 warnings`
+- `pytest -q` -> `386 passed, 3 warnings`
 - `ruff check kb_agent\learning\api.py kb_agent\learning\tutor.py kb_agent\dashboard\server.py tests\test_learning_platform_phase1.py` -> passed
+- `ruff check kb_agent\learning\api.py kb_agent\learning\explainer.py tests\test_learning_platform_phase3.py` -> passed
+- `node --check kb_agent\dashboard\static\app.js` -> passed
 
 Next phase:
 
-- Phase 3: Topic Pages.
+- Phase 4: Learning Paths.
 
 ## 1. Product Vision
 
@@ -1121,7 +1129,7 @@ Acceptance criteria:
 - graph nodes and relationships are returned only as supporting context
 - no-LLM fallback returns a useful structured answer
 
-### Phase 3: Topic Pages
+### Phase 3: Topic Pages - Completed
 
 Goal: turn nodes/features/modules into learner-friendly pages.
 
@@ -1136,8 +1144,8 @@ Deliverables:
 
 Acceptance criteria:
 
-- user can open a topic and understand it without reading raw graph data
-- topic page includes explanation, citations when available, prerequisites, and related topics
+- Done: user can open a topic and understand it without reading raw graph data
+- Done: topic page includes explanation, citations when available, prerequisites, and related topics
 
 ### Phase 4: Learning Paths
 

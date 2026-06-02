@@ -266,6 +266,167 @@ body {
     padding: 4px 10px;
 }
 
+.clickable-tag {
+    cursor: pointer;
+}
+
+.clickable-tag:hover {
+    color: #c9d1d9;
+    background: #30363d;
+}
+
+/* ---- Topic Pages ---- */
+
+.topic-header {
+    margin-bottom: 16px;
+}
+
+.topic-search-row {
+    display: flex;
+    gap: 8px;
+    max-width: 720px;
+}
+
+#topic-search-input {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    color: #c9d1d9;
+    flex: 1;
+    font-size: 13px;
+    padding: 8px 12px;
+}
+
+#topic-search-input:focus {
+    border-color: #58a6ff;
+    outline: none;
+}
+
+.topic-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.topic-card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    cursor: pointer;
+    min-height: 132px;
+    padding: 14px;
+}
+
+.topic-card:hover {
+    border-color: #58a6ff;
+}
+
+.topic-card-title {
+    color: #c9d1d9;
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    overflow-wrap: anywhere;
+}
+
+.topic-card-meta {
+    color: #8b949e;
+    font-size: 11px;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+}
+
+.topic-card p {
+    color: #c9d1d9;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.topic-detail {
+    max-width: 980px;
+}
+
+.topic-title-row {
+    align-items: flex-start;
+    display: flex;
+    gap: 16px;
+    justify-content: space-between;
+    margin-bottom: 16px;
+}
+
+.topic-title-row h2 {
+    color: #58a6ff;
+    font-size: 24px;
+    overflow-wrap: anywhere;
+}
+
+.warning-strip {
+    background: rgba(248, 81, 73, 0.08);
+    border: 1px solid #f85149;
+    border-radius: 8px;
+    color: #ffa198;
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 16px;
+    padding: 12px;
+}
+
+.citation-list {
+    display: grid;
+    gap: 8px;
+}
+
+.citation-card {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    color: #c9d1d9;
+    cursor: pointer;
+    padding: 10px 12px;
+    text-align: left;
+}
+
+.citation-card:hover {
+    border-color: #58a6ff;
+}
+
+.citation-card span,
+.citation-card small {
+    display: block;
+    overflow-wrap: anywhere;
+}
+
+.citation-card small {
+    color: #8b949e;
+    font-size: 11px;
+    margin-top: 2px;
+}
+
+.topic-node-tags {
+    margin-bottom: 10px;
+}
+
+.relationship-list {
+    border-top: 1px solid #21262d;
+}
+
+.relationship-item {
+    border-bottom: 1px solid #21262d;
+    color: #c9d1d9;
+    font-size: 13px;
+    padding: 8px 0;
+}
+
+.relationship-item span {
+    color: #58a6ff;
+    margin: 0 6px;
+}
+
+.inline-suggestions {
+    border-top: 0;
+    padding: 0;
+}
+
 /* ---- Overview Actions ---- */
 
 .overview-actions {

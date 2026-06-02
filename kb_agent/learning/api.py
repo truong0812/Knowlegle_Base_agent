@@ -1,15 +1,17 @@
-"""Deterministic Phase 1 API helpers for the learning platform."""
+"""Learning platform API helpers."""
 from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
+from hashlib import sha256
 import logging
 from pathlib import Path
 
 import orjson
 
 from kb_agent.graph.storage import GraphStorage, ReadOnlyStorage
-from kb_agent.learning.citations import citation_from_node
+from kb_agent.learning.explainer import PROMPT_VERSION as TOPIC_PROMPT_VERSION
+from kb_agent.learning.explainer import TopicExplainer, cache_payload
 from kb_agent.learning.models import (
     DashboardResponse,
     KbStatus,
@@ -67,6 +69,8 @@ class LearningApi:
         self._features_cache: list | None = None
         self._progress_cache: UserProgress | None = None
         self._tutor_cache: Tutor | None = None
+        self._topic_explainer_cache: TopicExplainer | None = None
+        self._topic_cache: dict[str, dict] | None = None
 
     def dashboard(self) -> DashboardResponse:
         manifest = self._load_manifest()
@@ -222,7 +226,13 @@ class LearningApi:
         }
 
     def topic(self, topic_id: str) -> TopicPage:
-        node = self._node_by_id_or_name(topic_id)
+        explainer = self._topic_explainer()
+        try:
+            node = explainer.resolve(topic_id)
+        except Exception as exc:
+            logger.exception("Topic resolution failed for %s.", topic_id)
+            return self._topic_error_page(topic_id, exc)
+
         if node is not None:
             self.accept_progress_event(
                 ProgressEvent(
@@ -235,66 +245,26 @@ class LearningApi:
                 (item for item in progress.viewed_topics if item.get("topic_id") == node.id),
                 {},
             )
-            return TopicPage(
-                id=node.id,
-                type=node.kind.value,
-                title=node.name,
-                summary=f"{node.name} is a {node.kind.value} in {node.path}.",
-                explanation=(
-                    f"{node.name} belongs to {node.path}. Phase 1 returns a stable "
-                    "contract; later phases will generate richer natural-language explanations."
-                ),
-                why_it_matters="This topic is part of the source graph and can anchor learning context.",
-                examples=[node.signature] if node.signature else [],
-                related_symbols=[],
-                citations=[citation_from_node(node)],
+            cache = self._load_topic_cache()
+            cache_key = self._topic_cache_key(node.id)
+            page = self._safe_explain_topic(
+                explainer,
+                topic_id,
                 progress=TopicProgress(
                     viewed=True,
                     last_viewed_at=topic_progress.get("viewed_at"),
                 ),
-                suggested_questions=[
-                    f"What does {node.name} do?",
-                    f"What calls {node.name}?",
-                    f"What should I learn before {node.name}?",
-                ],
-                graph_context={
-                    "nodes": [{"id": node.id, "name": node.name, "kind": node.kind.value}],
-                    "relationships": [],
-                },
+                cached=cache.get(cache_key) or cache.get(node.id),
             )
+            if cache_key not in cache and not self._topic_has_error(page):
+                self._store_topic_cache(page)
+            return page
 
-        warning = WarningInfo(code="topic_not_found", message="Topic was not found in the current graph.")
-        return TopicPage(
-            id=topic_id,
-            type="unknown",
-            title=topic_id,
-            summary="Topic not found.",
-            explanation="This topic is not available in the current knowledge graph.",
-            why_it_matters="Generate or refresh the knowledge base to make this topic available.",
-            warnings=[warning],
-        )
+        return self._safe_explain_topic(explainer, topic_id)
 
     def search_topics(self, query: str) -> dict:
-        q = query.strip().lower()
-        if not q:
-            return {"query": query, "results": []}
-        results = []
-        for node in self._nodes():
-            haystack = f"{node.name} {node.path} {node.kind.value}".lower()
-            if not q or q in haystack:
-                score = 1.0 if q and q in node.name.lower() else 0.75
-                results.append(
-                    TopicSearchResult(
-                        id=node.id,
-                        type=node.kind.value,
-                        title=node.name,
-                        summary=f"{node.kind.value} in {node.path}",
-                        score=score,
-                        matched_fields=["title" if q in node.name.lower() else "summary"],
-                    )
-                )
-        results.sort(key=lambda item: (-item.score, item.title, item.id))
-        return {"query": query, "results": [item.model_dump() for item in results[:20]]}
+        results = self._topic_explainer().search(query)
+        return {"query": query, "results": [item.model_dump() for item in results]}
 
     def tutor(self, request: TutorRequest) -> TutorResponse:
         return self._tutor_engine().answer(request)
@@ -539,6 +509,97 @@ class LearningApi:
             self._tutor_cache = default_tutor_factory(**kwargs)
         return self._tutor_cache
 
+    def _topic_explainer(self) -> TopicExplainer:
+        if self._topic_explainer_cache is not None:
+            return self._topic_explainer_cache
+        nodes, edges = self._graph() or ([], [])
+        self._topic_explainer_cache = TopicExplainer(
+            nodes=nodes,
+            edges=edges,
+            status=self.kb_status(),
+        )
+        return self._topic_explainer_cache
+
+    def _safe_explain_topic(
+        self,
+        explainer: TopicExplainer,
+        topic_id: str,
+        *,
+        progress: TopicProgress | None = None,
+        cached: dict | None = None,
+    ) -> TopicPage:
+        try:
+            return explainer.explain(topic_id, progress=progress, cached=cached)
+        except Exception as exc:
+            logger.exception("Topic explanation failed for %s.", topic_id)
+            return self._topic_error_page(topic_id, exc, progress=progress)
+
+    def _topic_error_page(
+        self,
+        topic_id: str,
+        exc: Exception,
+        *,
+        progress: TopicProgress | None = None,
+    ) -> TopicPage:
+        return TopicPage(
+            id=topic_id,
+            type="unknown",
+            title=topic_id,
+            summary="Topic explanation failed.",
+            explanation="This topic could not be explained because the topic explainer failed.",
+            why_it_matters="The learning platform returned a safe fallback instead of failing the request.",
+            progress=progress or TopicProgress(),
+            warnings=[
+                *self.kb_status().warnings,
+                WarningInfo(
+                    code="topic_explainer_error",
+                    message=f"Topic explainer failed with {type(exc).__name__}.",
+                ),
+            ],
+        )
+
+    def _topic_has_error(self, page: TopicPage) -> bool:
+        return any(warning.code == "topic_explainer_error" for warning in page.warnings)
+
+    def _topic_cache_key(self, topic_id: str) -> str:
+        manifest = self._load_manifest() or {}
+        kb_version = (
+            manifest.get("version")
+            or manifest.get("created_at")
+            or manifest.get("source_repo")
+            or "unknown"
+        )
+        raw_key = f"{kb_version}:{TOPIC_PROMPT_VERSION}:{topic_id}"
+        return f"topic:{sha256(raw_key.encode('utf-8')).hexdigest()}"
+
+    def _load_topic_cache(self) -> dict[str, dict]:
+        if self._topic_cache is not None:
+            return self._topic_cache
+        cache_path = self.learning_dir / "topics.json"
+        if not cache_path.exists():
+            self._topic_cache = {}
+            return self._topic_cache
+        try:
+            payload = orjson.loads(cache_path.read_bytes())
+        except (OSError, orjson.JSONDecodeError):
+            logger.warning("Invalid or unreadable topic cache at %s; ignoring it.", cache_path)
+            self._topic_cache = {}
+            return self._topic_cache
+        if not isinstance(payload, dict):
+            logger.warning("Topic cache at %s is not a JSON object; ignoring it.", cache_path)
+            self._topic_cache = {}
+            return self._topic_cache
+        self._topic_cache = payload
+        return self._topic_cache
+
+    def _store_topic_cache(self, page: TopicPage) -> None:
+        cache = self._load_topic_cache()
+        # TODO(Phase 7): cap this generated topic cache and evict least-recently used entries.
+        cache[self._topic_cache_key(page.id)] = cache_payload(page)
+        self.learning_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = self.learning_dir / "topics.json"
+        cache_path.write_bytes(orjson.dumps(cache, option=orjson.OPT_INDENT_2))
+
     def _load_manifest(self) -> dict | None:
         if self._manifest_cache is not _UNSET:
             return self._manifest_cache  # type: ignore[return-value]
@@ -602,12 +663,6 @@ class LearningApi:
             if edge.source in node_id_set or edge.target in node_id_set
         ]
         return filtered_nodes, filtered_edges
-
-    def _node_by_id_or_name(self, topic_id: str) -> SymbolNode | None:
-        for node in self._nodes():
-            if node.id == topic_id or node.name == topic_id:
-                return node
-        return None
 
     def _save_progress(self, progress: UserProgress) -> None:
         self.learning_dir.mkdir(parents=True, exist_ok=True)
