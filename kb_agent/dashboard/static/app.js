@@ -26,7 +26,6 @@ const KIND_COLORS = {
 const state = {
     activeView: "overview",
     currentNodeId: null,
-    currentTopicId: null,
     currentFeatureId: null,
     currentFilePath: null,
     chatHistory: [],
@@ -67,6 +66,16 @@ async function apiFetch(url, timeoutMs = 10000) {
     } finally {
         clearTimeout(timer);
     }
+}
+
+const apiClient = {
+    fetch(url, options = {}) {
+        return apiFetch(url, options.timeoutMs || 10000);
+    },
+};
+
+async function fetchData(url) {
+    return apiClient.fetch(url);
 }
 
 function formatNumber(n) {
@@ -114,33 +123,42 @@ function onRouteChange() {
         );
     });
 
-    // Toggle graph controls
-    document.getElementById("graph-controls").style.display = route.view === "graph" ? "flex" : "none";
-
-    // Toggle main areas
-    const mainContent = document.getElementById("main-content");
-    const graphContainer = document.getElementById("graph-container");
-
-    if (route.view === "graph") {
-        mainContent.style.display = "none";
-        graphContainer.style.display = "block";
-        if (!state.graphLoaded) {
-            GraphView.loadData();
-        } else {
-            GraphView.render();
-        }
-    } else {
-        mainContent.style.display = "block";
-        graphContainer.style.display = "none";
-        renderCurrentView(route);
-    }
+    renderRouteShell(route);
 
     // Update suggestions when view changes
     ChatPanel.updateDefaultSuggestions();
 }
 
-function renderCurrentView(route) {
-    const container = document.getElementById("main-content");
+function renderRouteShell(route) {
+    document.getElementById("graph-controls").style.display = route.view === "graph" ? "flex" : "none";
+
+    const mainContent = document.getElementById("main-content");
+    const graphContainer = document.getElementById("graph-container");
+
+    if (route.view === "graph") {
+        renderGraphRoute(mainContent, graphContainer);
+    } else {
+        renderContentRoute(mainContent, graphContainer, route);
+    }
+}
+
+function renderGraphRoute(mainContent, graphContainer) {
+    mainContent.style.display = "none";
+    graphContainer.style.display = "block";
+    if (!state.graphLoaded) {
+        GraphView.loadData();
+    } else {
+        GraphView.render();
+    }
+}
+
+function renderContentRoute(mainContent, graphContainer, route) {
+    mainContent.style.display = "block";
+    graphContainer.style.display = "none";
+    renderCurrentView(route, mainContent);
+}
+
+function renderCurrentView(route, container) {
     switch (route.view) {
         case "overview":
             renderOverview(container);
@@ -152,7 +170,6 @@ function renderCurrentView(route) {
             renderTopics(container);
             break;
         case "topic-detail":
-            state.currentTopicId = route.topicId;
             renderTopicDetail(container, route.topicId);
             break;
         case "feature-detail":
@@ -248,7 +265,7 @@ async function renderOverview(container) {
 async function renderTopics(container) {
     container.innerHTML = '<div class="loading-text">Loading topics...</div>';
     try {
-        const data = await apiFetch("/api/learning/dashboard");
+        const data = await fetchData("/api/learning/dashboard");
         const recommended = data.recommended_topics || [];
 
         let html = '<div class="topic-header">';
@@ -283,7 +300,7 @@ async function searchTopics(query) {
     if (!resultsEl) return;
     resultsEl.innerHTML = '<div class="loading-text">Searching topics...</div>';
     try {
-        const data = await apiFetch(`/api/learning/topics/search?q=${encodeURIComponent(query)}`);
+        const data = await fetchData(`/api/learning/topics/search?q=${encodeURIComponent(query)}`);
         if (!data.results || data.results.length === 0) {
             resultsEl.innerHTML = '<div class="overview-card"><h3>No Matches</h3><p>Try a symbol name, file path, or module keyword.</p></div>';
             return;
@@ -310,8 +327,7 @@ function renderTopicCard(topic) {
 async function renderTopicDetail(container, topicId) {
     container.innerHTML = '<div class="loading-text">Loading topic...</div>';
     try {
-        const data = await apiFetch(`/api/learning/topics/${encodeURIComponent(topicId)}`);
-        state.currentTopicId = data.id;
+        const data = await fetchData(`/api/learning/topics/${encodeURIComponent(topicId)}`);
         state.currentNodeId = data.id;
 
         let html = '<div class="topic-detail">';
