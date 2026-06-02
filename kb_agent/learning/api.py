@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
+import logging
 from pathlib import Path
 
 import orjson
@@ -29,12 +30,14 @@ from kb_agent.learning.models import (
     UserProgress,
     WarningInfo,
 )
-from kb_agent.learning.tutor import LearningTutor
+from kb_agent.learning.tutor import Tutor, default_tutor_factory
 from kb_agent.models.graph import SymbolEdge, SymbolNode
 
 
+logger = logging.getLogger(__name__)
+
 GraphCache = tuple[list[SymbolNode], list[SymbolEdge]]
-TutorFactory = Callable[..., LearningTutor]
+TutorFactory = Callable[..., Tutor]
 _UNSET = object()
 
 
@@ -57,13 +60,13 @@ class LearningApi:
         self.entries_dir = self.kb_dir / "entries"
         self.learning_dir = self.kb_dir / "learning"
         self.storage = storage or GraphStorage(self.graph_dir)
-        self._tutor_factory = tutor_factory or LearningTutor
+        self._tutor_factory = tutor_factory or default_tutor_factory
         self._manifest_cache: dict | None | object = _UNSET
         self._graph_cache: GraphCache | None | object = _UNSET
         self._kb_status_cache: KbStatus | None = None
         self._features_cache: list | None = None
         self._progress_cache: UserProgress | None = None
-        self._tutor_cache: LearningTutor | None = None
+        self._tutor_cache: Tutor | None = None
 
     def dashboard(self) -> DashboardResponse:
         manifest = self._load_manifest()
@@ -515,20 +518,25 @@ class LearningApi:
             return NextAction(type="start_path", label="Start with architecture", target_id=paths[0].id)
         return NextAction(type="ask_tutor", label="Ask the AI tutor", target_id=None)
 
-    def _tutor_engine(self) -> LearningTutor:
+    def _tutor_engine(self) -> Tutor:
         if self._tutor_cache is not None:
             return self._tutor_cache
-        graph = self._graph()
-        nodes: list[SymbolNode] = []
-        edges: list[SymbolEdge] = []
-        if graph is not None:
-            nodes, edges = graph
-        self._tutor_cache = self._tutor_factory(
-            nodes=nodes,
-            edges=edges,
-            status=self.kb_status(),
-            project_summary=self.project_summary(),
-        )
+        nodes, edges = self._graph() or ([], [])
+        kwargs = {
+            "nodes": nodes,
+            "edges": edges,
+            "status": self.kb_status(),
+            "project_summary": self.project_summary(),
+        }
+        factory = self._tutor_factory or default_tutor_factory
+        try:
+            self._tutor_cache = factory(**kwargs)
+        except Exception:
+            logger.exception("Learning tutor factory failed; falling back to default tutor.")
+            self._tutor_cache = default_tutor_factory(**kwargs)
+        if self._tutor_cache is None:
+            logger.error("Learning tutor factory returned None; falling back to default tutor.")
+            self._tutor_cache = default_tutor_factory(**kwargs)
         return self._tutor_cache
 
     def _load_manifest(self) -> dict | None:

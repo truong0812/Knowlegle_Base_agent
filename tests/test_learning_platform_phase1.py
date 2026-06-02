@@ -198,6 +198,44 @@ class TestLearningDashboardContract:
         assert captured_kwargs[0]["nodes"] == [node]
         assert isinstance(captured_kwargs[0]["status"], KbStatus)
 
+    def test_learning_api_falls_back_when_tutor_factory_fails(self, tmp_path: Path):
+        node = _node("repo/src/retrieval.py::retrieve", "retrieve")
+        storage = FakeStorage([node])
+        kb = tmp_path / "repo" / ".kb"
+        kb.mkdir(parents=True)
+        (kb / "manifest.json").write_text(
+            json.dumps({"source_repo": str(tmp_path / "repo"), "stats": {"total_entries": 1}}),
+            encoding="utf-8",
+        )
+
+        def tutor_factory(**kwargs):
+            raise RuntimeError("factory failed")
+
+        api = LearningApi(kb, storage=storage, tutor_factory=tutor_factory)
+        response = api.tutor(TutorRequest(message="Explain retrieve"))
+
+        assert response.graph_context["nodes"][0]["name"] == "retrieve"
+        assert response.recommended_next_steps[0].type == "open_topic"
+
+    def test_learning_api_falls_back_when_tutor_factory_returns_none(self, tmp_path: Path):
+        node = _node("repo/src/retrieval.py::retrieve", "retrieve")
+        storage = FakeStorage([node])
+        kb = tmp_path / "repo" / ".kb"
+        kb.mkdir(parents=True)
+        (kb / "manifest.json").write_text(
+            json.dumps({"source_repo": str(tmp_path / "repo"), "stats": {"total_entries": 1}}),
+            encoding="utf-8",
+        )
+
+        def tutor_factory(**kwargs):
+            return None
+
+        api = LearningApi(kb, storage=storage, tutor_factory=tutor_factory)
+        response = api.tutor(TutorRequest(message="Explain retrieve"))
+
+        assert response.graph_context["nodes"][0]["name"] == "retrieve"
+        assert response.recommended_next_steps[0].type == "open_topic"
+
 
 class TestLearningPathContracts:
     def test_paths_list_returns_starter_paths(self, learning_client: TestClient):

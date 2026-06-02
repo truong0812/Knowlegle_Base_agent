@@ -55,6 +55,18 @@ class TutorLLMClient(Protocol):
         """Yield response text chunks when the provider supports streaming."""
 
 
+class Tutor(Protocol):
+    """Interface for tutor engines used by LearningApi.
+
+    Any object with ``answer`` and ``stream_events`` methods satisfying
+    these signatures can be injected via ``LearningApi(tutor_factory=...)``.
+    """
+
+    def answer(self, request: TutorRequest) -> TutorResponse: ...
+
+    def stream_events(self, request: TutorRequest) -> Iterator[dict]: ...
+
+
 @dataclass(frozen=True)
 class TutorContext:
     """Retrieved graph context used to synthesize a tutor answer."""
@@ -342,6 +354,26 @@ class LearningTutor:
             f"current_context: {request.context.model_dump_json()}\n"
             f"retrieved_context: {_context_json(context)}"
         )
+
+
+def default_tutor_factory(
+    *,
+    nodes: Sequence[SymbolNode],
+    edges: Sequence[SymbolEdge],
+    status: KbStatus,
+    project_summary: ProjectSummary,
+) -> LearningTutor:
+    """Create the default :class:`LearningTutor` instance.
+
+    Re-exported so ``api.py`` can build a tutor without importing
+    ``LearningTutor`` directly.
+    """
+    return LearningTutor(
+        nodes=nodes,
+        edges=edges,
+        status=status,
+        project_summary=project_summary,
+    )
 
 
 def sse_encode(event: dict) -> str:
