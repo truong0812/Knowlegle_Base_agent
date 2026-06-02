@@ -3,12 +3,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
+from hashlib import sha256
 import logging
 from pathlib import Path
 
 import orjson
 
 from kb_agent.graph.storage import GraphStorage, ReadOnlyStorage
+from kb_agent.learning.explainer import PROMPT_VERSION as TOPIC_PROMPT_VERSION
 from kb_agent.learning.explainer import TopicExplainer, cache_payload
 from kb_agent.learning.models import (
     DashboardResponse,
@@ -225,7 +227,12 @@ class LearningApi:
 
     def topic(self, topic_id: str) -> TopicPage:
         explainer = self._topic_explainer()
-        node = explainer.resolve(topic_id)
+        try:
+            node = explainer.resolve(topic_id)
+        except Exception as exc:
+            logger.exception("Topic resolution failed for %s.", topic_id)
+            return self._topic_error_page(topic_id, exc)
+
         if node is not None:
             self.accept_progress_event(
                 ProgressEvent(
@@ -238,19 +245,22 @@ class LearningApi:
                 (item for item in progress.viewed_topics if item.get("topic_id") == node.id),
                 {},
             )
-            page = explainer.explain(
+            cache = self._load_topic_cache()
+            cache_key = self._topic_cache_key(node.id)
+            page = self._safe_explain_topic(
+                explainer,
                 topic_id,
                 progress=TopicProgress(
                     viewed=True,
                     last_viewed_at=topic_progress.get("viewed_at"),
                 ),
-                cached=self._load_topic_cache().get(node.id),
+                cached=cache.get(cache_key) or cache.get(node.id),
             )
-            if node.id not in self._load_topic_cache():
+            if cache_key not in cache and not self._topic_has_error(page):
                 self._store_topic_cache(page)
             return page
 
-        return explainer.explain(topic_id)
+        return self._safe_explain_topic(explainer, topic_id)
 
     def search_topics(self, query: str) -> dict:
         results = self._topic_explainer().search(query)
@@ -510,6 +520,58 @@ class LearningApi:
         )
         return self._topic_explainer_cache
 
+    def _safe_explain_topic(
+        self,
+        explainer: TopicExplainer,
+        topic_id: str,
+        *,
+        progress: TopicProgress | None = None,
+        cached: dict | None = None,
+    ) -> TopicPage:
+        try:
+            return explainer.explain(topic_id, progress=progress, cached=cached)
+        except Exception as exc:
+            logger.exception("Topic explanation failed for %s.", topic_id)
+            return self._topic_error_page(topic_id, exc, progress=progress)
+
+    def _topic_error_page(
+        self,
+        topic_id: str,
+        exc: Exception,
+        *,
+        progress: TopicProgress | None = None,
+    ) -> TopicPage:
+        return TopicPage(
+            id=topic_id,
+            type="unknown",
+            title=topic_id,
+            summary="Topic explanation failed.",
+            explanation="This topic could not be explained because the topic explainer failed.",
+            why_it_matters="The learning platform returned a safe fallback instead of failing the request.",
+            progress=progress or TopicProgress(),
+            warnings=[
+                *self.kb_status().warnings,
+                WarningInfo(
+                    code="topic_explainer_error",
+                    message=f"Topic explainer failed with {type(exc).__name__}.",
+                ),
+            ],
+        )
+
+    def _topic_has_error(self, page: TopicPage) -> bool:
+        return any(warning.code == "topic_explainer_error" for warning in page.warnings)
+
+    def _topic_cache_key(self, topic_id: str) -> str:
+        manifest = self._load_manifest() or {}
+        kb_version = (
+            manifest.get("version")
+            or manifest.get("created_at")
+            or manifest.get("source_repo")
+            or "unknown"
+        )
+        raw_key = f"{kb_version}:{TOPIC_PROMPT_VERSION}:{topic_id}"
+        return f"topic:{sha256(raw_key.encode('utf-8')).hexdigest()}"
+
     def _load_topic_cache(self) -> dict[str, dict]:
         if self._topic_cache is not None:
             return self._topic_cache
@@ -519,16 +581,21 @@ class LearningApi:
             return self._topic_cache
         try:
             payload = orjson.loads(cache_path.read_bytes())
-        except orjson.JSONDecodeError:
+        except (OSError, orjson.JSONDecodeError):
+            logger.warning("Invalid or unreadable topic cache at %s; ignoring it.", cache_path)
             self._topic_cache = {}
             return self._topic_cache
-        self._topic_cache = payload if isinstance(payload, dict) else {}
+        if not isinstance(payload, dict):
+            logger.warning("Topic cache at %s is not a JSON object; ignoring it.", cache_path)
+            self._topic_cache = {}
+            return self._topic_cache
+        self._topic_cache = payload
         return self._topic_cache
 
     def _store_topic_cache(self, page: TopicPage) -> None:
         cache = self._load_topic_cache()
         # TODO(Phase 7): cap this generated topic cache and evict least-recently used entries.
-        cache[page.id] = cache_payload(page)
+        cache[self._topic_cache_key(page.id)] = cache_payload(page)
         self.learning_dir.mkdir(parents=True, exist_ok=True)
         cache_path = self.learning_dir / "topics.json"
         cache_path.write_bytes(orjson.dumps(cache, option=orjson.OPT_INDENT_2))

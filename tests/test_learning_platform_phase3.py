@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 
 from kb_agent.dashboard.server import create_app
 from kb_agent.graph.storage import GraphStorage
+from kb_agent.learning.api import LearningApi
+from kb_agent.learning.models import TopicPage
 from kb_agent.models.entry import Language, SymbolKind
 from kb_agent.models.graph import EdgeKind, SymbolEdge, SymbolNode
 
@@ -105,8 +107,10 @@ def test_topic_page_includes_explanation_relationships_and_cache(tmp_path: Path)
 
     cache_path = kb / "learning" / "topics.json"
     cache = json.loads(cache_path.read_text(encoding="utf-8"))
-    assert "repo/src/retrieval.py::retrieve" in cache
-    assert cache["repo/src/retrieval.py::retrieve"]["metadata"]["prompt_version"] == "topic_explainer.v1"
+    assert "repo/src/retrieval.py::retrieve" not in cache
+    cached_pages = list(cache.values())
+    assert cached_pages[0]["id"] == "repo/src/retrieval.py::retrieve"
+    assert cached_pages[0]["metadata"]["prompt_version"] == "topic_explainer.v1"
 
 
 def test_topic_search_matches_path_kind_and_signature(tmp_path: Path):
@@ -137,3 +141,40 @@ def test_topic_page_missing_graph_degrades_with_warning(tmp_path: Path):
         "missing_kb",
         "topic_not_found",
     }
+
+
+def test_topic_cache_invalid_json_is_ignored(tmp_path: Path):
+    kb = _make_topic_kb(tmp_path)
+    learning_dir = kb / "learning"
+    learning_dir.mkdir()
+    (learning_dir / "topics.json").write_text("{not-json", encoding="utf-8")
+    client = TestClient(create_app(kb))
+
+    resp = client.get("/api/learning/topics/retrieve")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["title"] == "retrieve"
+    cache = json.loads((learning_dir / "topics.json").read_text(encoding="utf-8"))
+    assert list(cache.values())[0]["id"] == "repo/src/retrieval.py::retrieve"
+
+
+def test_topic_explainer_error_returns_structured_warning(tmp_path: Path):
+    kb = _make_topic_kb(tmp_path)
+    nodes, _ = GraphStorage(kb / "graph").load()
+
+    class FailingExplainer:
+        def resolve(self, topic_id: str):
+            return nodes[0]
+
+        def explain(self, *args, **kwargs) -> TopicPage:
+            raise RuntimeError("boom")
+
+    api = LearningApi(kb)
+    api._topic_explainer_cache = FailingExplainer()  # type: ignore[assignment]
+
+    page = api.topic("retrieve")
+
+    assert page.type == "unknown"
+    assert page.progress.viewed is True
+    assert page.warnings[-1].code == "topic_explainer_error"

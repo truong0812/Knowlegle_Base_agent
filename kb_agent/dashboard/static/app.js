@@ -75,6 +75,9 @@ const apiClient = {
 };
 
 async function fetchData(url) {
+    if (typeof url !== "string" || !url.startsWith("/api/")) {
+        throw new Error("fetchData expects an internal /api/ URL.");
+    }
     return apiClient.fetch(url);
 }
 
