@@ -3,6 +3,34 @@
 > Goal: evolve Knowledge Base Agent from a graph-oriented code exploration tool into a complete AI learning platform.
 > The platform should help learners understand a repository through natural-language tutoring, guided learning paths, topic pages, progress tracking, recommendations, and graph-backed citations.
 
+## Current Status
+
+Updated: 2026-06-02
+
+Phase 1 is complete.
+
+Completed:
+
+- `kb_agent.learning` package created.
+- Learning API contract models created.
+- Citation and progress event models created.
+- Prompt template folder created with `v1` templates.
+- Dashboard server exposes `/api/learning/*` Phase 1 endpoints.
+- Lightweight progress persists to `.kb/learning/progress.json`.
+- Progress events append to `.kb/learning/events.jsonl`.
+- `LearningApi` supports injected read-only graph storage.
+- Graph, manifest, status, feature, and progress reads are cached per `LearningApi` instance.
+- Phase 1 contract tests added.
+
+Verification:
+
+- `pytest -q` -> `368 passed, 3 warnings`
+- `ruff check kb_agent\learning tests\test_learning_platform_phase1.py kb_agent\dashboard\server.py` -> passed
+
+Next phase:
+
+- Phase 2: Natural-Language Tutor.
+
 ## 1. Product Vision
 
 The current dashboard exposes the knowledge graph too directly. A complete product should make the graph an intelligence layer, not the primary user experience.
@@ -1041,7 +1069,7 @@ For tutor chat:
 
 ## 14. Implementation Roadmap
 
-### Phase 1: Platform Contracts And Models
+### Phase 1: Platform Contracts And Models - Completed
 
 Goal: define the platform shape before UI polish.
 
@@ -1056,9 +1084,11 @@ Deliverables:
 
 Acceptance criteria:
 
-- all learning APIs can return deterministic placeholder data
-- frontend can consume structured responses
-- no endpoint returns raw graph data as the primary user-facing answer
+- Done: all learning APIs return deterministic placeholder data.
+- Done: frontend can consume structured responses.
+- Done: no endpoint returns raw graph data as the primary user-facing answer.
+- Done: progress events and lesson completion persist lightweight single-user state.
+- Done: storage can be injected through the read-only storage interface.
 
 ### Phase 2: Natural-Language Tutor
 

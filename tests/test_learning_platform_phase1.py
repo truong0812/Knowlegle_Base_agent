@@ -9,9 +9,28 @@ from fastapi.testclient import TestClient
 
 from kb_agent.dashboard.server import create_app
 from kb_agent.graph.features import Feature
+from kb_agent.graph.hotpath import HotPathScore
 from kb_agent.graph.storage import GraphStorage
+from kb_agent.learning.api import LearningApi
 from kb_agent.models.entry import Language, SymbolKind
 from kb_agent.models.graph import EdgeKind, SymbolEdge, SymbolNode
+
+
+class FakeStorage:
+    def __init__(self, nodes: list[SymbolNode], edges: list[SymbolEdge] | None = None):
+        self.nodes = nodes
+        self.edges = edges or []
+        self.load_count = 0
+
+    def load(self) -> tuple[list[SymbolNode], list[SymbolEdge]]:
+        self.load_count += 1
+        return self.nodes, self.edges
+
+    def load_hotpath(self) -> dict[str, HotPathScore]:
+        return {}
+
+    def load_features(self) -> list[Feature]:
+        return []
 
 
 def _node(
@@ -119,6 +138,22 @@ class TestLearningDashboardContract:
         assert data["kb_status"]["available"] is False
         assert data["kb_status"]["warnings"][0]["code"] == "missing_kb"
         assert data["suggested_next_action"]["type"] == "open_graph"
+
+    def test_learning_api_accepts_injected_storage(self, tmp_path: Path):
+        node = _node("repo/src/retrieval.py::retrieve", "retrieve")
+        storage = FakeStorage([node])
+        kb = tmp_path / "repo" / ".kb"
+        kb.mkdir(parents=True)
+        (kb / "manifest.json").write_text(
+            json.dumps({"source_repo": str(tmp_path / "repo"), "stats": {"total_entries": 1}}),
+            encoding="utf-8",
+        )
+
+        api = LearningApi(kb, storage=storage)
+        status = api.kb_status()
+
+        assert status.node_count == 1
+        assert storage.load_count == 1
 
 
 class TestLearningPathContracts:
