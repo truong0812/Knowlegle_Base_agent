@@ -363,6 +363,10 @@ function renderPathCard(path) {
     </div>`;
 }
 
+/**
+ * Render a learning path detail page with objectives, lesson progress,
+ * completion actions, and source/topic links for each lesson.
+ */
 async function renderPathDetail(container, pathId) {
     container.innerHTML = '<div class="loading-text">Loading path...</div>';
     try {

@@ -265,6 +265,15 @@ class LearningPathPlanner:
         return cycle_edges
 
 
+def default_path_planner_factory(
+    nodes: list[SymbolNode],
+    edges: list[SymbolEdge],
+    hotpath: dict | None = None,
+) -> LearningPathPlanner:
+    """Create the default deterministic learning path planner."""
+    return LearningPathPlanner(nodes, edges, hotpath)
+
+
 def paths_cache_key(manifest: dict | None, node_count: int, edge_count: int) -> str:
     """Return a stable cache key for generated paths."""
     raw = {

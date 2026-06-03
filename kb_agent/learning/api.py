@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 import logging
 from pathlib import Path
+from typing import Protocol
 
 import orjson
 
@@ -31,7 +32,7 @@ from kb_agent.learning.models import (
     UserProgress,
     WarningInfo,
 )
-from kb_agent.learning.planner import LearningPathPlanner, paths_cache_key
+from kb_agent.learning.planner import default_path_planner_factory, paths_cache_key
 from kb_agent.learning.tutor import Tutor, default_tutor_factory
 from kb_agent.models.graph import SymbolEdge, SymbolNode
 
@@ -41,6 +42,24 @@ logger = logging.getLogger(__name__)
 GraphCache = tuple[list[SymbolNode], list[SymbolEdge]]
 TutorFactory = Callable[..., Tutor]
 _UNSET = object()
+
+
+class PathPlanningResult(Protocol):
+    """Planner result shape consumed by LearningApi."""
+
+    paths: list[LearningPathDetail]
+    warnings: list[WarningInfo]
+
+
+class PathPlanner(Protocol):
+    """Interface required by LearningApi for path generation."""
+
+    def generate(self) -> PathPlanningResult:
+        """Generate path details and warnings."""
+        ...
+
+
+PathPlannerFactory = Callable[[list[SymbolNode], list[SymbolEdge], dict], PathPlanner]
 
 
 class LearningApi:
@@ -56,6 +75,7 @@ class LearningApi:
         kb_dir: Path,
         storage: ReadOnlyStorage | None = None,
         tutor_factory: TutorFactory | None = None,
+        path_planner_factory: PathPlannerFactory | None = None,
     ):
         self.kb_dir = kb_dir.resolve()
         self.graph_dir = self.kb_dir / "graph"
@@ -63,6 +83,7 @@ class LearningApi:
         self.learning_dir = self.kb_dir / "learning"
         self.storage = storage or GraphStorage(self.graph_dir)
         self._tutor_factory = tutor_factory or default_tutor_factory
+        self._path_planner_factory = path_planner_factory or default_path_planner_factory
         self._manifest_cache: dict | None | object = _UNSET
         self._graph_cache: GraphCache | None | object = _UNSET
         self._kb_status_cache: KbStatus | None = None
@@ -388,15 +409,25 @@ class LearningApi:
         return {path.id: path for path in paths}
 
     def _generate_paths(self) -> list[LearningPathDetail]:
-        graph = self._graph()
+        try:
+            graph = self._graph()
+        except OSError:
+            logger.exception("Graph files could not be loaded for learning path generation.")
+            return []
         if graph is None:
             return []
+
         nodes, edges = graph
         try:
             hotpath = self.storage.load_hotpath()
-        except FileNotFoundError:
+        except OSError:
+            logger.warning("Hot-path scores are unavailable; generating learning paths without them.")
             hotpath = {}
-        planned = LearningPathPlanner(nodes, edges, hotpath).generate()
+        try:
+            planned = self._path_planner_factory(nodes, edges, hotpath).generate()
+        except Exception:
+            logger.exception("Learning path planner failed.")
+            return []
         paths = []
         for path in planned.paths:
             paths.append(path.model_copy(update={"warnings": [*path.warnings, *planned.warnings]}))
@@ -689,7 +720,8 @@ class LearningApi:
         else:
             try:
                 graph = self.storage.load()
-            except FileNotFoundError:
+            except OSError:
+                logger.warning("Graph files are unavailable or unreadable.", exc_info=True)
                 graph = None
             self._graph_cache = graph
 
