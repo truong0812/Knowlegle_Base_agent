@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol
 
 import orjson
+from pydantic import ValidationError
 
 from kb_agent.learning.models import LearningPathDetail, WarningInfo
 from kb_agent.learning.planner import default_path_planner_factory, paths_cache_key
@@ -49,11 +50,26 @@ class LearningPathRepository:
             return []
         try:
             payload = orjson.loads(self._cache_path.read_bytes())
-        except (OSError, orjson.JSONDecodeError):
-            logger.warning("Invalid or unreadable learning paths cache at %s; regenerating.", self._cache_path)
+        except OSError as exc:
+            logger.warning(
+                "Learning paths cache could not be read at %s: %s. Regenerating.",
+                self._cache_path,
+                exc,
+            )
+            return []
+        except orjson.JSONDecodeError as exc:
+            logger.warning(
+                "Learning paths cache contains invalid JSON at %s: %s. Regenerating.",
+                self._cache_path,
+                exc,
+            )
             return []
         if not isinstance(payload, dict):
-            logger.warning("Learning paths cache at %s is not a JSON object; regenerating.", self._cache_path)
+            logger.warning(
+                "Learning paths cache at %s is %s, expected JSON object. Regenerating.",
+                self._cache_path,
+                type(payload).__name__,
+            )
             return []
         if payload.get("cache_key") != cache_key:
             return []
@@ -64,8 +80,12 @@ class LearningPathRepository:
                 for path in payload.get("paths", [])
                 if isinstance(path, dict)
             ]
-        except Exception:
-            logger.warning("Learning paths cache at %s failed validation; regenerating.", self._cache_path)
+        except ValidationError as exc:
+            logger.warning(
+                "Learning paths cache failed schema validation at %s: %s. Regenerating.",
+                self._cache_path,
+                exc,
+            )
             return []
 
     def store(self, cache_key: str, generated_at: str, paths: list[LearningPathDetail]) -> None:
@@ -75,8 +95,15 @@ class LearningPathRepository:
             "generated_at": generated_at,
             "paths": [path.model_dump() for path in paths],
         }
-        self._learning_dir.mkdir(parents=True, exist_ok=True)
-        self._cache_path.write_bytes(orjson.dumps(payload, option=orjson.OPT_INDENT_2))
+        try:
+            self._learning_dir.mkdir(parents=True, exist_ok=True)
+            self._cache_path.write_bytes(orjson.dumps(payload, option=orjson.OPT_INDENT_2))
+        except OSError as exc:
+            logger.warning(
+                "Learning paths cache could not be written at %s: %s.",
+                self._cache_path,
+                exc,
+            )
 
 
 class LearningPathCatalog:

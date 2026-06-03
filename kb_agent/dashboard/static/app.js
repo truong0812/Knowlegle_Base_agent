@@ -336,11 +336,7 @@ async function renderPaths(container) {
             return;
         }
 
-        html += '<div class="path-grid">';
-        paths.forEach((path) => {
-            html += renderPathCard(path);
-        });
-        html += '</div>';
+        html += `<div class="path-grid">${paths.map(renderPathCard).join("")}</div>`;
         container.innerHTML = html;
     } catch (error) {
         container.innerHTML = `<div class="error-card"><p>Error loading paths: ${escapeHtml(error.message)}</p></div>`;

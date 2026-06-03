@@ -145,6 +145,16 @@ def test_path_cache_is_reused_without_regeneration(tmp_path: Path):
     assert second[0].title == "Cached Architecture Path"
 
 
+def test_path_repository_ignores_invalid_json_cache(tmp_path: Path):
+    learning_dir = tmp_path / "repo" / ".kb" / "learning"
+    learning_dir.mkdir(parents=True)
+    (learning_dir / "paths.json").write_text("{not-json", encoding="utf-8")
+
+    repository = LearningPathRepository(learning_dir)
+
+    assert repository.load("cache-key") == []
+
+
 def test_path_catalog_does_not_load_hotpath_when_cache_is_valid(tmp_path: Path):
     kb = _make_path_kb(tmp_path)
     api = LearningApi(kb)
