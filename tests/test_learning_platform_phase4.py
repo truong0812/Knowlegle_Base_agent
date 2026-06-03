@@ -11,6 +11,7 @@ from kb_agent.graph.hotpath import HotPathScore
 from kb_agent.graph.storage import GraphStorage
 from kb_agent.learning.api import LearningApi
 from kb_agent.learning.models import LearningLesson, LearningPathDetail
+from kb_agent.learning.paths import LearningPathCatalog, LearningPathRepository
 from kb_agent.learning.planner import LearningPathPlanner
 from kb_agent.models.entry import Language, SymbolKind
 from kb_agent.models.graph import EdgeKind, SymbolEdge, SymbolNode
@@ -142,6 +143,25 @@ def test_path_cache_is_reused_without_regeneration(tmp_path: Path):
 
     assert first[0].id == "architecture-overview"
     assert second[0].title == "Cached Architecture Path"
+
+
+def test_path_catalog_does_not_load_hotpath_when_cache_is_valid(tmp_path: Path):
+    kb = _make_path_kb(tmp_path)
+    api = LearningApi(kb)
+    graph = api._graph()
+    assert graph is not None
+    api.paths()
+
+    catalog = LearningPathCatalog(LearningPathRepository(kb / "learning"))
+
+    paths = catalog.paths(
+        graph=graph,
+        manifest={"source_repo": str(kb.parent), "created_at": "2026-06-02T10:00:00"},
+        hotpath_loader=lambda: (_ for _ in ()).throw(AssertionError("hotpath should not load")),
+        generated_at="2026-06-03T00:00:00+00:00",
+    )
+
+    assert paths[0].id == "architecture-overview"
 
 
 def test_learning_api_accepts_injected_path_planner_factory(tmp_path: Path):

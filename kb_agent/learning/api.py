@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 from hashlib import sha256
 import logging
 from pathlib import Path
-from typing import Protocol
 
 import orjson
 
@@ -32,7 +31,11 @@ from kb_agent.learning.models import (
     UserProgress,
     WarningInfo,
 )
-from kb_agent.learning.planner import default_path_planner_factory, paths_cache_key
+from kb_agent.learning.paths import (
+    LearningPathCatalog,
+    LearningPathRepository,
+    PathPlannerFactory,
+)
 from kb_agent.learning.tutor import Tutor, default_tutor_factory
 from kb_agent.models.graph import SymbolEdge, SymbolNode
 
@@ -42,24 +45,6 @@ logger = logging.getLogger(__name__)
 GraphCache = tuple[list[SymbolNode], list[SymbolEdge]]
 TutorFactory = Callable[..., Tutor]
 _UNSET = object()
-
-
-class PathPlanningResult(Protocol):
-    """Planner result shape consumed by LearningApi."""
-
-    paths: list[LearningPathDetail]
-    warnings: list[WarningInfo]
-
-
-class PathPlanner(Protocol):
-    """Interface required by LearningApi for path generation."""
-
-    def generate(self) -> PathPlanningResult:
-        """Generate path details and warnings."""
-        ...
-
-
-PathPlannerFactory = Callable[[list[SymbolNode], list[SymbolEdge], dict], PathPlanner]
 
 
 class LearningApi:
@@ -83,7 +68,10 @@ class LearningApi:
         self.learning_dir = self.kb_dir / "learning"
         self.storage = storage or GraphStorage(self.graph_dir)
         self._tutor_factory = tutor_factory or default_tutor_factory
-        self._path_planner_factory = path_planner_factory or default_path_planner_factory
+        self._path_catalog = LearningPathCatalog(
+            LearningPathRepository(self.learning_dir),
+            planner_factory=path_planner_factory,
+        )
         self._manifest_cache: dict | None | object = _UNSET
         self._graph_cache: GraphCache | None | object = _UNSET
         self._kb_status_cache: KbStatus | None = None
@@ -92,8 +80,6 @@ class LearningApi:
         self._tutor_cache: Tutor | None = None
         self._topic_explainer_cache: TopicExplainer | None = None
         self._topic_cache: dict[str, dict] | None = None
-        self._paths_cache: list[LearningPathDetail] | None = None
-        self._path_index_cache: dict[str, LearningPathDetail] | None = None
 
     def dashboard(self) -> DashboardResponse:
         manifest = self._load_manifest()
@@ -342,10 +328,11 @@ class LearningApi:
         return {"accepted": True, "progress": progress.model_dump(), "event": event.model_dump()}
 
     def recommendations(self) -> dict:
-        recs = []
-        for index, path in enumerate(self.paths()):
+        paths = self.paths()
+        recommendations = []
+        for index, path in enumerate(paths):
             rec_type = "continue_path" if path.status == "in_progress" else "start_path"
-            recs.append(
+            recommendations.append(
                 Recommendation(
                     id=f"rec-{path.id}",
                     type=rec_type,
@@ -363,7 +350,7 @@ class LearningApi:
         nodes = self._nodes()
         if nodes:
             first = nodes[0]
-            recs.append(
+            recommendations.append(
                 Recommendation(
                     id="rec-open-topic",
                     type="open_topic",
@@ -374,108 +361,31 @@ class LearningApi:
                     signals=["recent_graph_context"],
                 )
             )
-        return {"recommendations": [rec.model_dump() for rec in recs]}
+        return {"recommendations": [rec.model_dump() for rec in recommendations]}
 
     def _learning_paths(self, *, non_blocking: bool = False) -> list[LearningPathDetail]:
-        if self._paths_cache is not None:
-            return self._paths_cache
-
-        cached = self._load_paths_cache()
-        if cached:
-            self._paths_cache = cached
-            self._path_index_cache = self._build_path_index(cached)
-            return cached
-        if non_blocking:
-            return []
-
-        generated = self._generate_paths()
-        self._paths_cache = generated
-        self._path_index_cache = self._build_path_index(generated)
-        if generated:
-            self._store_paths_cache(generated)
-        return generated
+        return self._path_catalog.paths(
+            graph=self._graph(),
+            manifest=self._load_manifest(),
+            hotpath_loader=self._load_hotpath,
+            generated_at=self._now(),
+            non_blocking=non_blocking,
+        )
 
     def _learning_path_index(self) -> dict[str, LearningPathDetail]:
-        if self._path_index_cache is not None:
-            return self._path_index_cache
-        paths = self._learning_paths()
-        self._path_index_cache = self._build_path_index(paths)
-        return self._path_index_cache
+        return self._path_catalog.path_index(
+            graph=self._graph(),
+            manifest=self._load_manifest(),
+            hotpath_loader=self._load_hotpath,
+            generated_at=self._now(),
+        )
 
-    def _build_path_index(
-        self,
-        paths: list[LearningPathDetail],
-    ) -> dict[str, LearningPathDetail]:
-        return {path.id: path for path in paths}
-
-    def _generate_paths(self) -> list[LearningPathDetail]:
+    def _load_hotpath(self) -> dict:
         try:
-            graph = self._graph()
-        except OSError:
-            logger.exception("Graph files could not be loaded for learning path generation.")
-            return []
-        if graph is None:
-            return []
-
-        nodes, edges = graph
-        try:
-            hotpath = self.storage.load_hotpath()
+            return self.storage.load_hotpath()
         except OSError:
             logger.warning("Hot-path scores are unavailable; generating learning paths without them.")
-            hotpath = {}
-        try:
-            planned = self._path_planner_factory(nodes, edges, hotpath).generate()
-        except Exception:
-            logger.exception("Learning path planner failed.")
-            return []
-        paths = []
-        for path in planned.paths:
-            paths.append(path.model_copy(update={"warnings": [*path.warnings, *planned.warnings]}))
-        return paths
-
-    def _load_paths_cache(self) -> list[LearningPathDetail]:
-        cache_path = self.learning_dir / "paths.json"
-        if not cache_path.exists():
-            return []
-        try:
-            payload = orjson.loads(cache_path.read_bytes())
-        except (OSError, orjson.JSONDecodeError):
-            logger.warning("Invalid or unreadable learning paths cache at %s; regenerating.", cache_path)
-            return []
-        if not isinstance(payload, dict):
-            logger.warning("Learning paths cache at %s is not a JSON object; regenerating.", cache_path)
-            return []
-
-        graph = self._graph()
-        node_count = len(graph[0]) if graph else 0
-        edge_count = len(graph[1]) if graph else 0
-        expected_key = paths_cache_key(self._load_manifest(), node_count, edge_count)
-        if payload.get("cache_key") != expected_key:
-            return []
-
-        try:
-            return [
-                LearningPathDetail.model_validate(path)
-                for path in payload.get("paths", [])
-                if isinstance(path, dict)
-            ]
-        except Exception:
-            logger.warning("Learning paths cache at %s failed validation; regenerating.", cache_path)
-            return []
-
-    def _store_paths_cache(self, paths: list[LearningPathDetail]) -> None:
-        graph = self._graph()
-        node_count = len(graph[0]) if graph else 0
-        edge_count = len(graph[1]) if graph else 0
-        payload = {
-            "cache_key": paths_cache_key(self._load_manifest(), node_count, edge_count),
-            "generated_at": self._now(),
-            "paths": [path.model_dump() for path in paths],
-        }
-        self.learning_dir.mkdir(parents=True, exist_ok=True)
-        (self.learning_dir / "paths.json").write_bytes(
-            orjson.dumps(payload, option=orjson.OPT_INDENT_2)
-        )
+            return {}
 
     def _summary_from_detail(self, detail: LearningPathDetail) -> LearningPathSummary:
         return LearningPathSummary(
