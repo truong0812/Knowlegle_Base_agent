@@ -23,6 +23,7 @@ from kb_agent.learning.models import (
     UserProgress,
     WarningInfo,
 )
+from kb_agent.learning.recommendations import LearningRecommendationEngine, RecommendationResult
 from kb_agent.learning.tutor import Tutor, default_tutor_factory
 
 __all__ = [
@@ -34,12 +35,14 @@ __all__ = [
     "LearningLesson",
     "LearningPathDetail",
     "LearningPathSummary",
+    "LearningRecommendationEngine",
     "NextAction",
     "PathProgress",
     "ProgressEvent",
     "ProgressSummary",
     "ProjectSummary",
     "Recommendation",
+    "RecommendationResult",
     "TopicPage",
     "TopicProgress",
     "TopicSearchResult",

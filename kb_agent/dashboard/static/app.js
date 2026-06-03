@@ -251,7 +251,10 @@ function renderCurrentView(route, container) {
 async function renderOverview(container) {
     container.innerHTML = '<div class="loading-text">Loading overview...</div>';
     try {
-        const data = await apiFetch("/api/overview");
+        const [data, learningData] = await Promise.all([
+            apiFetch("/api/overview"),
+            apiFetch("/api/learning/recommendations").catch(() => ({ recommendations: [] })),
+        ]);
         if (data.error) {
             container.innerHTML = `<div class="error-card"><h2>Knowledge Base Not Found</h2><p>${escapeHtml(data.error.message)}</p><p>Run <code>kb-agent analyze</code> first to create a knowledge base.</p></div>`;
             return;
@@ -273,6 +276,16 @@ async function renderOverview(container) {
             html += `<div class="stat-card"><div class="stat-value">${formatNumber(data.stats.edge_count)}</div><div class="stat-label">Edges</div></div>`;
             html += `<div class="stat-card"><div class="stat-value">${(data.languages || []).join(", ") || "—"}</div><div class="stat-label">Languages</div></div>`;
             html += `</div>`;
+        }
+
+        const recommendations = (learningData.recommendations || []).slice(0, 4);
+        if (recommendations.length > 0) {
+            html += `<div class="overview-card"><h3>Recommended Next</h3>`;
+            html += `<div class="recommendation-list">`;
+            recommendations.forEach((recommendation) => {
+                html += renderRecommendationItem(recommendation);
+            });
+            html += `</div></div>`;
         }
 
         // Top features
@@ -315,6 +328,41 @@ async function renderOverview(container) {
     } catch (error) {
         container.innerHTML = `<div class="error-card"><p>Error loading overview: ${escapeHtml(error.message)}</p></div>`;
     }
+}
+
+function renderRecommendationItem(recommendation) {
+    const target = recommendation.target || {};
+    const action = recommendationAction(recommendation);
+    const signals = (recommendation.signals || []).slice(0, 3);
+    return `<div class="recommendation-item">
+        <div>
+            <div class="recommendation-title">${escapeHtml(recommendation.label)}</div>
+            <p>${escapeHtml(recommendation.reason)}</p>
+            <div class="tags recommendation-tags">${signals.map((signal) => `<span class="tag">${escapeHtml(signal.replace("_", " "))}</span>`).join("")}</div>
+        </div>
+        <button class="action-btn primary" onclick="${action}">${escapeHtml(recommendationButtonLabel(recommendation, target))}</button>
+    </div>`;
+}
+
+function recommendationAction(recommendation) {
+    const target = recommendation.target || {};
+    if (target.topic_id) {
+        return `navigate('#topics/${encodeURIComponent(target.topic_id)}')`;
+    }
+    if (target.path_id) {
+        return `navigate('#paths/${encodeURIComponent(target.path_id)}')`;
+    }
+    if (recommendation.type === "ask_tutor") {
+        return "navigate('#tutor')";
+    }
+    return "navigate('#graph')";
+}
+
+function recommendationButtonLabel(recommendation, target) {
+    if (target.topic_id) return "Open topic";
+    if (target.path_id) return recommendation.type === "continue_path" ? "Continue" : "Start";
+    if (recommendation.type === "ask_tutor") return "Ask";
+    return "Open";
 }
 
 // ---------------------------------------------------------------------------

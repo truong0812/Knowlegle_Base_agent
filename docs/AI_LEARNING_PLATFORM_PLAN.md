@@ -5,9 +5,9 @@
 
 ## Current Status
 
-Updated: 2026-06-02
+Updated: 2026-06-03
 
-Phase 1, Phase 2, and Phase 3 are complete.
+Phase 1, Phase 2, Phase 3, Phase 4, and Phase 5 are complete.
 
 Completed:
 
@@ -35,17 +35,29 @@ Completed:
 - Topic page responses are cached in `.kb/learning/topics.json`.
 - Dashboard UI includes a Topics route with search, topic cards, citation cards, related topic links, graph neighborhood, and ask-about-topic actions.
 - Phase 3 topic explainer, search, cache, and degradation tests added.
+- `kb_agent.learning.paths` graph-backed learning path catalog and persistence helpers created.
+- Learning paths now include graph-backed lessons, citations, related topics, progress state, and circular dependency warnings.
+- Dashboard recommends at least 3 graph-backed starter paths when KB data is available.
+- Lesson completion persists to `.kb/learning/progress.json` and updates path progress.
+- Phase 4 path generation, cache, progress, and cycle handling tests added.
+- `kb_agent.learning.recommendations` recommendation scoring engine created.
+- Recommendations now combine path progress, prerequisites, viewed topics, active goal text, graph relationships, and hot-path scores.
+- Dashboard suggested next action and recommended topics now use personalized recommendation results.
+- Dashboard UI overview includes a Recommended Next section backed by `/api/learning/recommendations`.
+- Phase 5 recommendation ranking and dashboard personalization tests added.
 
 Verification:
 
-- `pytest -q` -> `386 passed, 3 warnings`
+- `pytest -q` -> `405 passed, 3 warnings`
 - `ruff check kb_agent\learning\api.py kb_agent\learning\tutor.py kb_agent\dashboard\server.py tests\test_learning_platform_phase1.py` -> passed
 - `ruff check kb_agent\learning\api.py kb_agent\learning\explainer.py tests\test_learning_platform_phase3.py` -> passed
+- `ruff check kb_agent\learning\recommendations.py kb_agent\learning\api.py tests\test_learning_platform_phase5.py` -> passed
 - `node --check kb_agent\dashboard\static\app.js` -> passed
+- `pytest tests\test_learning_platform_phase5.py -q` -> `8 passed`
 
 Next phase:
 
-- Phase 4: Learning Paths.
+- Phase 6: Knowledge Explorer Polish.
 
 ## 1. Product Vision
 
@@ -1147,7 +1159,7 @@ Acceptance criteria:
 - Done: user can open a topic and understand it without reading raw graph data
 - Done: topic page includes explanation, citations when available, prerequisites, and related topics
 
-### Phase 4: Learning Paths
+### Phase 4: Learning Paths - Completed
 
 Goal: guide users through the codebase.
 
@@ -1166,7 +1178,7 @@ Acceptance criteria:
 - path progress is stored
 - path generation does not block dashboard load
 
-### Phase 5: Recommendation Engine
+### Phase 5: Recommendation Engine - Completed
 
 Goal: personalize next steps from graph signals and learner progress.
 
@@ -1179,8 +1191,8 @@ Deliverables:
 
 Acceptance criteria:
 
-- recommendations change based on completed lessons, viewed topics, and active goal
-- prerequisite topics are prioritized before advanced topics
+- Done: recommendations change based on completed lessons, viewed topics, and active goal
+- Done: prerequisite topics are prioritized before advanced topics
 
 ### Phase 6: Knowledge Explorer Polish
 

@@ -22,7 +22,6 @@ from kb_agent.learning.models import (
     ProgressEvent,
     ProgressSummary,
     ProjectSummary,
-    Recommendation,
     TopicPage,
     TopicProgress,
     TopicSearchResult,
@@ -36,6 +35,7 @@ from kb_agent.learning.paths import (
     LearningPathRepository,
     PathPlannerFactory,
 )
+from kb_agent.learning.recommendations import LearningRecommendationEngine, RecommendationResult
 from kb_agent.learning.tutor import Tutor, default_tutor_factory
 from kb_agent.models.graph import SymbolEdge, SymbolNode
 
@@ -85,9 +85,10 @@ class LearningApi:
         manifest = self._load_manifest()
         status = self.kb_status(manifest)
         paths = self.paths()
-        topics = self._recommended_topics()
         progress = self.progress_summary()
-        next_action = self._next_action(paths, status)
+        recommendation_result = self._recommendation_result(paths=paths)
+        topics = recommendation_result.topics
+        next_action = self._next_action(paths, status, recommendation_result)
 
         return DashboardResponse(
             summary=self.project_summary(manifest),
@@ -328,40 +329,8 @@ class LearningApi:
         return {"accepted": True, "progress": progress.model_dump(), "event": event.model_dump()}
 
     def recommendations(self) -> dict:
-        paths = self.paths()
-        recommendations = []
-        for index, path in enumerate(paths):
-            rec_type = "continue_path" if path.status == "in_progress" else "start_path"
-            recommendations.append(
-                Recommendation(
-                    id=f"rec-{path.id}",
-                    type=rec_type,
-                    label=("Continue " if rec_type == "continue_path" else "Start ") + path.title,
-                    reason=(
-                        "This path is already in progress."
-                        if rec_type == "continue_path"
-                        else "This starter path is generated from repository graph signals."
-                    ),
-                    target={"path_id": path.id, "lesson_id": None, "topic_id": None},
-                    score=0.95 - (index * 0.05),
-                    signals=["path_progress" if rec_type == "continue_path" else "graph_centrality"],
-                )
-            )
-        nodes = self._nodes()
-        if nodes:
-            first = nodes[0]
-            recommendations.append(
-                Recommendation(
-                    id="rec-open-topic",
-                    type="open_topic",
-                    label=f"Open {first.name}",
-                    reason="This symbol is available in the current knowledge graph.",
-                    target={"path_id": None, "lesson_id": None, "topic_id": first.id},
-                    score=0.75,
-                    signals=["recent_graph_context"],
-                )
-            )
-        return {"recommendations": [rec.model_dump() for rec in recommendations]}
+        result = self._recommendation_result()
+        return {"recommendations": [rec.model_dump() for rec in result.recommendations]}
 
     def _learning_paths(self, *, non_blocking: bool = False) -> list[LearningPathDetail]:
         return self._path_catalog.paths(
@@ -386,6 +355,22 @@ class LearningApi:
         except OSError:
             logger.warning("Hot-path scores are unavailable; generating learning paths without them.")
             return {}
+
+    def _recommendation_result(
+        self,
+        *,
+        paths: list[LearningPathSummary] | None = None,
+    ) -> RecommendationResult:
+        graph = self._graph()
+        nodes, edges = graph or ([], [])
+        engine = LearningRecommendationEngine(
+            paths=paths if paths is not None else self.paths(),
+            nodes=sorted(nodes, key=lambda node: (node.path, node.name, node.id)),
+            edges=edges,
+            hotpath=self._load_hotpath(),
+            progress=self.progress(),
+        )
+        return engine.generate()
 
     def _summary_from_detail(self, detail: LearningPathDetail) -> LearningPathSummary:
         return LearningPathSummary(
@@ -465,9 +450,25 @@ class LearningApi:
             for feature in features[:10]
         ]
 
-    def _next_action(self, paths: list[LearningPathSummary], status: KbStatus) -> NextAction:
+    def _next_action(
+        self,
+        paths: list[LearningPathSummary],
+        status: KbStatus,
+        recommendations: RecommendationResult | None = None,
+    ) -> NextAction:
         if not status.available:
             return NextAction(type="open_graph", label="Generate the knowledge base", target_id=None)
+        if recommendations and recommendations.recommendations:
+            top = recommendations.recommendations[0]
+            return NextAction(
+                type=top.type,
+                label=top.label,
+                target_id=(
+                    top.target.get("lesson_id")
+                    or top.target.get("path_id")
+                    or top.target.get("topic_id")
+                ),
+            )
         if paths:
             return NextAction(type="start_path", label="Start with architecture", target_id=paths[0].id)
         return NextAction(type="ask_tutor", label="Ask the AI tutor", target_id=None)

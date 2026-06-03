@@ -246,6 +246,40 @@ body {
     color: #58a6ff;
 }
 
+.recommendation-list {
+    display: grid;
+    gap: 10px;
+}
+
+.recommendation-item {
+    align-items: flex-start;
+    background: #0d1117;
+    border: 1px solid #21262d;
+    border-radius: 6px;
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+    padding: 12px;
+}
+
+.recommendation-title {
+    color: #c9d1d9;
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.recommendation-item p {
+    color: #8b949e;
+    font-size: 12px;
+    line-height: 1.5;
+    margin-bottom: 8px;
+}
+
+.recommendation-tags {
+    gap: 4px;
+}
+
 .view-title {
     color: #58a6ff;
     font-size: 20px;
