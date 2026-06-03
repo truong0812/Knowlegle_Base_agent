@@ -427,6 +427,128 @@ body {
     padding: 0;
 }
 
+/* ---- Learning Paths ---- */
+
+.path-header {
+    margin-bottom: 16px;
+}
+
+.path-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+.path-card,
+.lesson-card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 14px;
+}
+
+.path-card {
+    cursor: pointer;
+    min-height: 172px;
+}
+
+.path-card:hover {
+    border-color: #58a6ff;
+}
+
+.path-card-top,
+.lesson-card-head {
+    align-items: flex-start;
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.path-card-title {
+    color: #c9d1d9;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.path-card p,
+.lesson-card p {
+    color: #c9d1d9;
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 10px;
+}
+
+.path-progress-bar {
+    background: #0d1117;
+    border-radius: 999px;
+    height: 6px;
+    margin: 12px 0 8px;
+    overflow: hidden;
+}
+
+.path-progress-bar div {
+    background: #3fb950;
+    height: 100%;
+}
+
+.path-card-foot,
+.lesson-kicker {
+    color: #8b949e;
+    font-size: 11px;
+}
+
+.status-pill {
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 999px;
+    color: #8b949e;
+    flex-shrink: 0;
+    font-size: 11px;
+    padding: 3px 8px;
+    text-transform: capitalize;
+}
+
+.status-pill.in_progress {
+    border-color: #ffa657;
+    color: #ffa657;
+}
+
+.status-pill.completed {
+    border-color: #3fb950;
+    color: #3fb950;
+}
+
+.path-detail {
+    max-width: 980px;
+}
+
+.lesson-list {
+    color: #c9d1d9;
+    font-size: 13px;
+    line-height: 1.6;
+    margin-left: 18px;
+}
+
+.lesson-stack {
+    display: grid;
+    gap: 12px;
+}
+
+.lesson-card h3 {
+    color: #c9d1d9;
+    font-size: 16px;
+    margin-top: 2px;
+}
+
+.lesson-card.completed {
+    border-color: rgba(63, 185, 80, 0.45);
+}
+
+.lesson-tags {
+    margin-bottom: 12px;
+}
+
 /* ---- Overview Actions ---- */
 
 .overview-actions {
