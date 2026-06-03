@@ -72,6 +72,7 @@ class LearningApi:
         self._topic_explainer_cache: TopicExplainer | None = None
         self._topic_cache: dict[str, dict] | None = None
         self._paths_cache: list[LearningPathDetail] | None = None
+        self._path_index_cache: dict[str, LearningPathDetail] | None = None
 
     def dashboard(self) -> DashboardResponse:
         manifest = self._load_manifest()
@@ -156,7 +157,7 @@ class LearningApi:
         ]
 
     def path_detail(self, path_id: str) -> LearningPathDetail | None:
-        detail = next((path for path in self._learning_paths() if path.id == path_id), None)
+        detail = self._learning_path_index().get(path_id)
         if detail is None:
             return None
         return self._apply_detail_progress(detail)
@@ -361,15 +362,30 @@ class LearningApi:
         cached = self._load_paths_cache()
         if cached:
             self._paths_cache = cached
+            self._path_index_cache = self._build_path_index(cached)
             return cached
         if non_blocking:
             return []
 
         generated = self._generate_paths()
         self._paths_cache = generated
+        self._path_index_cache = self._build_path_index(generated)
         if generated:
             self._store_paths_cache(generated)
         return generated
+
+    def _learning_path_index(self) -> dict[str, LearningPathDetail]:
+        if self._path_index_cache is not None:
+            return self._path_index_cache
+        paths = self._learning_paths()
+        self._path_index_cache = self._build_path_index(paths)
+        return self._path_index_cache
+
+    def _build_path_index(
+        self,
+        paths: list[LearningPathDetail],
+    ) -> dict[str, LearningPathDetail]:
+        return {path.id: path for path in paths}
 
     def _generate_paths(self) -> list[LearningPathDetail]:
         graph = self._graph()

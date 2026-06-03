@@ -10,6 +10,7 @@ from kb_agent.dashboard.server import create_app
 from kb_agent.graph.hotpath import HotPathScore
 from kb_agent.graph.storage import GraphStorage
 from kb_agent.learning.api import LearningApi
+from kb_agent.learning.planner import LearningPathPlanner
 from kb_agent.models.entry import Language, SymbolKind
 from kb_agent.models.graph import EdgeKind, SymbolEdge, SymbolNode
 
@@ -140,3 +141,20 @@ def test_path_cache_is_reused_without_regeneration(tmp_path: Path):
 
     assert first[0].id == "architecture-overview"
     assert second[0].title == "Cached Architecture Path"
+
+
+def test_path_planner_cycle_detection_handles_deep_graph_iteratively():
+    nodes = [
+        _node(f"node_{index}", f"src/node_{index}.py", line_start=index + 1)
+        for index in range(1200)
+    ]
+    edges = [
+        SymbolEdge(source=nodes[index].id, target=nodes[index + 1].id, kind=EdgeKind.CALLS)
+        for index in range(len(nodes) - 1)
+    ]
+    edges.append(SymbolEdge(source=nodes[-1].id, target=nodes[25].id, kind=EdgeKind.CALLS))
+
+    planned = LearningPathPlanner(nodes, edges).generate()
+
+    assert len(planned.paths) == 3
+    assert "circular_dependency_detected" in {warning.code for warning in planned.warnings}

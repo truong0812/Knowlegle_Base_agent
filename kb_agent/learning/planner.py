@@ -61,6 +61,7 @@ class LearningPathPlanner:
         self._edges = edges
         self._hotpath = hotpath or {}
         self._node_by_id = {node.id: node for node in nodes}
+        self._degree_by_node, self._related_by_node = self._build_graph_indexes()
         self._warnings: list[WarningInfo] = []
         self._cycle_edges = self._find_cycle_edges()
 
@@ -173,16 +174,10 @@ class LearningPathPlanner:
         return keyword_score + edge_score + hotness + kind_score
 
     def _degree(self, node_id: str) -> int:
-        return sum(1 for edge in self._edges if edge.source == node_id or edge.target == node_id)
+        return self._degree_by_node.get(node_id, 0)
 
     def _related_topics(self, node_id: str) -> list[str]:
-        related = []
-        for edge in self._edges:
-            if edge.source == node_id and edge.target in self._node_by_id:
-                related.append(edge.target)
-            elif edge.target == node_id and edge.source in self._node_by_id:
-                related.append(edge.source)
-        return related[:5]
+        return self._related_by_node.get(node_id, [])[:5]
 
     def _key_concepts(self, node: SymbolNode) -> list[str]:
         path_parts = [part for part in Path(node.path).parts[:2] if part]
@@ -205,6 +200,21 @@ class LearningPathPlanner:
             return f"Connect {node.name}"
         return f"Practice with {node.name}" if node.name else f"{fallback} step {index + 1}"
 
+    def _build_graph_indexes(self) -> tuple[dict[str, int], dict[str, list[str]]]:
+        degree_by_node: dict[str, int] = {}
+        related_by_node: dict[str, list[str]] = {}
+        for edge in self._edges:
+            source_exists = edge.source in self._node_by_id
+            target_exists = edge.target in self._node_by_id
+            if source_exists:
+                degree_by_node[edge.source] = degree_by_node.get(edge.source, 0) + 1
+            if target_exists:
+                degree_by_node[edge.target] = degree_by_node.get(edge.target, 0) + 1
+            if source_exists and target_exists:
+                related_by_node.setdefault(edge.source, []).append(edge.target)
+                related_by_node.setdefault(edge.target, []).append(edge.source)
+        return degree_by_node, related_by_node
+
     def _find_cycle_edges(self) -> set[tuple[str, str]]:
         adjacency: dict[str, list[str]] = {}
         for edge in self._edges:
@@ -215,25 +225,43 @@ class LearningPathPlanner:
         visiting: set[str] = set()
         visited: set[str] = set()
 
-        def visit(node_id: str, stack: list[str]) -> None:
-            if node_id in visiting:
-                start = stack.index(node_id) if node_id in stack else 0
-                cycle = stack[start:] + [node_id]
-                for source, target in zip(cycle, cycle[1:], strict=False):
-                    cycle_edges.add((source, target))
-                return
-            if node_id in visited:
-                return
-            visiting.add(node_id)
-            stack.append(node_id)
-            for target in adjacency.get(node_id, []):
-                visit(target, stack)
-            stack.pop()
-            visiting.remove(node_id)
-            visited.add(node_id)
-
         for node_id in sorted(adjacency):
-            visit(node_id, [])
+            if node_id in visited:
+                continue
+            stack: list[tuple[str, int]] = [(node_id, 0)]
+            path: list[str] = []
+            path_index: dict[str, int] = {}
+
+            while stack:
+                current, next_index = stack[-1]
+                if next_index == 0:
+                    if current in visited:
+                        stack.pop()
+                        continue
+                    visiting.add(current)
+                    path_index[current] = len(path)
+                    path.append(current)
+
+                neighbors = adjacency.get(current, [])
+                if next_index >= len(neighbors):
+                    stack.pop()
+                    visiting.discard(current)
+                    visited.add(current)
+                    if path and path[-1] == current:
+                        path.pop()
+                    path_index.pop(current, None)
+                    continue
+
+                target = neighbors[next_index]
+                stack[-1] = (current, next_index + 1)
+                if target in visiting:
+                    start = path_index.get(target, 0)
+                    cycle = path[start:] + [target]
+                    for source, cycle_target in zip(cycle, cycle[1:], strict=False):
+                        cycle_edges.add((source, cycle_target))
+                    continue
+                if target not in visited:
+                    stack.append((target, 0))
         return cycle_edges
 
 
