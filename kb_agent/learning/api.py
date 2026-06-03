@@ -15,7 +15,6 @@ from kb_agent.learning.explainer import TopicExplainer, cache_payload
 from kb_agent.learning.models import (
     DashboardResponse,
     KbStatus,
-    LearningLesson,
     LearningPathDetail,
     LearningPathSummary,
     NextAction,
@@ -31,6 +30,11 @@ from kb_agent.learning.models import (
     TutorResponse,
     UserProgress,
     WarningInfo,
+)
+from kb_agent.learning.paths import (
+    LearningPathCatalog,
+    LearningPathRepository,
+    PathPlannerFactory,
 )
 from kb_agent.learning.tutor import Tutor, default_tutor_factory
 from kb_agent.models.graph import SymbolEdge, SymbolNode
@@ -56,6 +60,7 @@ class LearningApi:
         kb_dir: Path,
         storage: ReadOnlyStorage | None = None,
         tutor_factory: TutorFactory | None = None,
+        path_planner_factory: PathPlannerFactory | None = None,
     ):
         self.kb_dir = kb_dir.resolve()
         self.graph_dir = self.kb_dir / "graph"
@@ -63,6 +68,10 @@ class LearningApi:
         self.learning_dir = self.kb_dir / "learning"
         self.storage = storage or GraphStorage(self.graph_dir)
         self._tutor_factory = tutor_factory or default_tutor_factory
+        self._path_catalog = LearningPathCatalog(
+            LearningPathRepository(self.learning_dir),
+            planner_factory=path_planner_factory,
+        )
         self._manifest_cache: dict | None | object = _UNSET
         self._graph_cache: GraphCache | None | object = _UNSET
         self._kb_status_cache: KbStatus | None = None
@@ -148,41 +157,17 @@ class LearningApi:
             created_at=manifest.get("created_at") if manifest else None,
         )
 
-    def paths(self) -> list[LearningPathSummary]:
-        return [self._apply_path_progress(path) for path in self._starter_paths()]
+    def paths(self, *, non_blocking: bool = False) -> list[LearningPathSummary]:
+        return [
+            self._summary_from_detail(self._apply_detail_progress(path))
+            for path in self._learning_paths(non_blocking=non_blocking)
+        ]
 
     def path_detail(self, path_id: str) -> LearningPathDetail | None:
-        summary = next((path for path in self._starter_paths() if path.id == path_id), None)
-        if summary is None:
+        detail = self._learning_path_index().get(path_id)
+        if detail is None:
             return None
-        lessons = self._lessons_for_path(summary.id)
-        completed_ids = self._completed_lesson_ids(path_id)
-        for lesson in lessons:
-            lesson.completed = lesson.id in completed_ids
-        completed_count = sum(1 for lesson in lessons if lesson.completed)
-        status = self._path_status(completed_count, len(lessons))
-        return LearningPathDetail(
-            id=summary.id,
-            title=summary.title,
-            description=summary.description,
-            audience_level=summary.audience_level,
-            estimated_minutes=summary.estimated_minutes,
-            prerequisites=summary.prerequisites,
-            lesson_count=len(lessons),
-            completed_lesson_count=completed_count,
-            status=status,
-            objectives=[
-                "Understand the purpose of this area.",
-                "Connect important concepts to source references.",
-                "Know what to inspect next.",
-            ],
-            lessons=lessons,
-            progress=PathProgress(
-                completed_lesson_count=completed_count,
-                lesson_count=len(lessons),
-                status=status,
-            ),
-        )
+        return self._apply_detail_progress(detail)
 
     def complete_lesson(self, path_id: str, lesson_id: str) -> dict:
         detail = self.path_detail(path_id)
@@ -202,6 +187,16 @@ class LearningApi:
             current_index = lesson_ids.index(lesson_id)
             if current_index + 1 < len(lesson_ids):
                 next_lesson_id = lesson_ids[current_index + 1]
+            self.accept_progress_event(
+                ProgressEvent(
+                    event_type="path_started",
+                    context={
+                        "page": "path",
+                        "path_id": path_id,
+                        "lesson_id": lesson_id,
+                    },
+                )
+            )
             self.accept_progress_event(
                 ProgressEvent(
                     event_type="lesson_completed",
@@ -316,6 +311,8 @@ class LearningApi:
                 },
                 ["path_id", "lesson_id"],
             )
+        elif event.event_type == "path_started" and event.context.path_id:
+            progress.last_visited_context = event.context
         elif event.event_type == "goal_updated":
             goal = event.metadata.get("goal")
             if isinstance(goal, str):
@@ -331,21 +328,29 @@ class LearningApi:
         return {"accepted": True, "progress": progress.model_dump(), "event": event.model_dump()}
 
     def recommendations(self) -> dict:
-        recs = [
-            Recommendation(
-                id="rec-start-architecture",
-                type="start_path",
-                label="Start with Architecture overview",
-                reason="Architecture is the broadest entry point into the repository.",
-                target={"path_id": "architecture-overview", "lesson_id": None, "topic_id": None},
-                score=0.95,
-                signals=["prerequisite", "graph_centrality"],
+        paths = self.paths()
+        recommendations = []
+        for index, path in enumerate(paths):
+            rec_type = "continue_path" if path.status == "in_progress" else "start_path"
+            recommendations.append(
+                Recommendation(
+                    id=f"rec-{path.id}",
+                    type=rec_type,
+                    label=("Continue " if rec_type == "continue_path" else "Start ") + path.title,
+                    reason=(
+                        "This path is already in progress."
+                        if rec_type == "continue_path"
+                        else "This starter path is generated from repository graph signals."
+                    ),
+                    target={"path_id": path.id, "lesson_id": None, "topic_id": None},
+                    score=0.95 - (index * 0.05),
+                    signals=["path_progress" if rec_type == "continue_path" else "graph_centrality"],
+                )
             )
-        ]
         nodes = self._nodes()
         if nodes:
             first = nodes[0]
-            recs.append(
+            recommendations.append(
                 Recommendation(
                     id="rec-open-topic",
                     type="open_topic",
@@ -356,82 +361,61 @@ class LearningApi:
                     signals=["recent_graph_context"],
                 )
             )
-        return {"recommendations": [rec.model_dump() for rec in recs]}
+        return {"recommendations": [rec.model_dump() for rec in recommendations]}
 
-    def _starter_paths(self) -> list[LearningPathSummary]:
-        return [
-            LearningPathSummary(
-                id="architecture-overview",
-                title="Architecture overview",
-                description="Understand the repository shape, main modules, and entry points.",
-                estimated_minutes=20,
-                lesson_count=3,
-            ),
-            LearningPathSummary(
-                id="query-and-retrieval",
-                title="Query and retrieval pipeline",
-                description="Follow how questions become source-grounded retrieval context.",
-                estimated_minutes=25,
-                lesson_count=3,
-                prerequisites=["architecture-overview"],
-            ),
-            LearningPathSummary(
-                id="knowledge-graph-construction",
-                title="Knowledge graph construction",
-                description="Learn how symbols, edges, features, and graph signals are built.",
-                estimated_minutes=30,
-                lesson_count=3,
-                prerequisites=["architecture-overview"],
-            ),
-        ]
-
-    def _lessons_for_path(self, path_id: str) -> list[LearningLesson]:
-        base = {
-            "architecture-overview": [
-                ("lesson-1", "Repository shape", "Learn the top-level modules and generated KB structure."),
-                ("lesson-2", "Core pipeline", "Connect analyzer, graph, indexer, and query layers."),
-                ("lesson-3", "Where to inspect next", "Use topics and graph context to continue learning."),
-            ],
-            "query-and-retrieval": [
-                ("lesson-1", "Query entry point", "Understand how a user question enters the system."),
-                ("lesson-2", "Context expansion", "Follow semantic retrieval plus graph expansion."),
-                ("lesson-3", "Composed answer context", "See how citations and source context are assembled."),
-            ],
-            "knowledge-graph-construction": [
-                ("lesson-1", "Symbol nodes", "Understand graph nodes from parsed source symbols."),
-                ("lesson-2", "Relationships", "Understand calls, imports, contains, and type-use edges."),
-                ("lesson-3", "Graph signals", "Understand hot-path and centrality-style signals."),
-            ],
-        }
-        items = base.get(path_id, [])
-        lessons = []
-        for index, (lesson_id, title, summary) in enumerate(items):
-            next_lesson_id = items[index + 1][0] if index + 1 < len(items) else None
-            lessons.append(
-                LearningLesson(
-                    id=lesson_id,
-                    title=title,
-                    summary=summary,
-                    explanation=summary,
-                    key_concepts=["source", "graph", "learning"],
-                    related_topics=[],
-                    citations=[],
-                    next_lesson_id=next_lesson_id,
-                )
-            )
-        return lessons
-
-    def _apply_path_progress(self, path: LearningPathSummary) -> LearningPathSummary:
-        detail_lessons = self._lessons_for_path(path.id)
-        completed_count = len(self._completed_lesson_ids(path.id))
-        completed_count = min(completed_count, len(detail_lessons))
-        return path.model_copy(
-            update={
-                "lesson_count": len(detail_lessons),
-                "completed_lesson_count": completed_count,
-                "status": self._path_status(completed_count, len(detail_lessons)),
-            }
+    def _learning_paths(self, *, non_blocking: bool = False) -> list[LearningPathDetail]:
+        return self._path_catalog.paths(
+            graph=self._graph(),
+            manifest=self._load_manifest(),
+            hotpath_loader=self._load_hotpath,
+            generated_at=self._now(),
+            non_blocking=non_blocking,
         )
+
+    def _learning_path_index(self) -> dict[str, LearningPathDetail]:
+        return self._path_catalog.path_index(
+            graph=self._graph(),
+            manifest=self._load_manifest(),
+            hotpath_loader=self._load_hotpath,
+            generated_at=self._now(),
+        )
+
+    def _load_hotpath(self) -> dict:
+        try:
+            return self.storage.load_hotpath()
+        except OSError:
+            logger.warning("Hot-path scores are unavailable; generating learning paths without them.")
+            return {}
+
+    def _summary_from_detail(self, detail: LearningPathDetail) -> LearningPathSummary:
+        return LearningPathSummary(
+            id=detail.id,
+            title=detail.title,
+            description=detail.description,
+            audience_level=detail.audience_level,
+            estimated_minutes=detail.estimated_minutes,
+            lesson_count=detail.lesson_count,
+            completed_lesson_count=detail.completed_lesson_count,
+            prerequisites=detail.prerequisites,
+            status=detail.status,
+        )
+
+    def _apply_detail_progress(self, detail: LearningPathDetail) -> LearningPathDetail:
+        detail = detail.model_copy(deep=True)
+        completed_ids = self._completed_lesson_ids(detail.id)
+        for lesson in detail.lessons:
+            lesson.completed = lesson.id in completed_ids
+        completed_count = sum(1 for lesson in detail.lessons if lesson.completed)
+        status = self._path_status(completed_count, len(detail.lessons))
+        detail.lesson_count = len(detail.lessons)
+        detail.completed_lesson_count = completed_count
+        detail.status = status
+        detail.progress = PathProgress(
+            completed_lesson_count=completed_count,
+            lesson_count=len(detail.lessons),
+            status=status,
+        )
+        return detail
 
     def _completed_lesson_ids(self, path_id: str) -> set[str]:
         return {
@@ -646,7 +630,8 @@ class LearningApi:
         else:
             try:
                 graph = self.storage.load()
-            except FileNotFoundError:
+            except OSError:
+                logger.warning("Graph files are unavailable or unreadable.", exc_info=True)
                 graph = None
             self._graph_cache = graph
 

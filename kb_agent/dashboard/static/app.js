@@ -70,6 +70,29 @@ async function apiFetch(url, timeoutMs = 10000) {
     }
 }
 
+async function apiPost(url, payload = {}, timeoutMs = 10000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+        });
+        if (!response.ok) {
+            const detail = await responseDetail(response);
+            const error = new Error(`API error: ${response.status} ${formatErrorDetail(detail)}`);
+            error.status = response.status;
+            error.detail = detail;
+            throw error;
+        }
+        return response.json();
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 async function responseDetail(response) {
     if (!response.headers.get("content-type")?.includes("json")) {
         return response.statusText;
@@ -118,6 +141,10 @@ function parseHash() {
     if (parts[0] === "features" && parts.length > 1) {
         return { view: "feature-detail", featureId: parts.slice(1).join("/") };
     }
+    if (parts[0] === "paths" && parts.length > 1) {
+        return { view: "path-detail", pathId: decodeURIComponent(parts.slice(1).join("/")) };
+    }
+    if (parts[0] === "paths") return { view: "paths" };
     if (parts[0] === "topics" && parts.length > 1) {
         return { view: "topic-detail", topicId: decodeURIComponent(parts.slice(1).join("/")) };
     }
@@ -144,6 +171,7 @@ function onRouteChange() {
             "active",
             tab.dataset.view === route.view ||
                 (tab.dataset.view === "features" && route.view === "feature-detail") ||
+                (tab.dataset.view === "paths" && route.view === "path-detail") ||
                 (tab.dataset.view === "topics" && route.view === "topic-detail")
         );
     });
@@ -190,6 +218,12 @@ function renderCurrentView(route, container) {
             break;
         case "features":
             renderFeatures(container);
+            break;
+        case "paths":
+            renderPaths(container);
+            break;
+        case "path-detail":
+            renderPathDetail(container, route.pathId);
             break;
         case "topics":
             renderTopics(container);
@@ -271,7 +305,7 @@ async function renderOverview(container) {
 
         // Action buttons
         html += `<div class="action-buttons overview-actions">`;
-        html += `<button class="action-btn primary" onclick="navigate('#graph')">Start with Architecture</button>`;
+        html += `<button class="action-btn primary" onclick="navigate('#paths')">Start a Learning Path</button>`;
         html += `<button class="action-btn primary" onclick="navigate('#topics')">Explore Topics</button>`;
         html += `<button class="action-btn primary" onclick="navigate('#features')">Explore Features</button>`;
         html += `<button class="action-btn primary" onclick="ChatPanel.focus()">Ask about this project</button>`;
@@ -280,6 +314,142 @@ async function renderOverview(container) {
         container.innerHTML = html;
     } catch (error) {
         container.innerHTML = `<div class="error-card"><p>Error loading overview: ${escapeHtml(error.message)}</p></div>`;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Learning Path Views
+// ---------------------------------------------------------------------------
+
+async function renderPaths(container) {
+    container.innerHTML = '<div class="loading-text">Loading learning paths...</div>';
+    try {
+        const data = await fetchData("/api/learning/paths");
+        const paths = data.paths || [];
+        let html = '<div class="path-header">';
+        html += '<h2 class="view-title">Learning Paths</h2>';
+        html += '</div>';
+
+        if (!paths.length) {
+            html += '<div class="overview-card"><h3>No Paths Yet</h3><p>No graph-backed learning paths are available. Generate or refresh the knowledge base first.</p></div>';
+            container.innerHTML = html;
+            return;
+        }
+
+        html += `<div class="path-grid">${paths.map(renderPathCard).join("")}</div>`;
+        container.innerHTML = html;
+    } catch (error) {
+        container.innerHTML = `<div class="error-card"><p>Error loading paths: ${escapeHtml(error.message)}</p></div>`;
+    }
+}
+
+function renderPathCard(path) {
+    const complete = path.lesson_count ? Math.round((path.completed_lesson_count / path.lesson_count) * 100) : 0;
+    return `<div class="path-card" onclick="navigate('#paths/${encodeURIComponent(path.id)}')">
+        <div class="path-card-top">
+            <div>
+                <div class="path-card-title">${escapeHtml(path.title)}</div>
+                <div class="topic-card-meta">${escapeHtml(path.audience_level)} &middot; ${path.estimated_minutes} min</div>
+            </div>
+            <span class="status-pill ${escapeAttribute(path.status)}">${escapeHtml(path.status.replace("_", " "))}</span>
+        </div>
+        <p>${escapeHtml(path.description)}</p>
+        <div class="path-progress-bar"><div style="width:${complete}%"></div></div>
+        <div class="path-card-foot">${path.completed_lesson_count}/${path.lesson_count} lessons complete</div>
+    </div>`;
+}
+
+/**
+ * Render a learning path detail page with objectives, lesson progress,
+ * completion actions, and source/topic links for each lesson.
+ */
+async function renderPathDetail(container, pathId) {
+    container.innerHTML = '<div class="loading-text">Loading path...</div>';
+    try {
+        const data = await fetchData(`/api/learning/paths/${encodeURIComponent(pathId)}`);
+        let html = '<div class="path-detail">';
+        html += `<button class="back-btn" onclick="navigate('#paths')">&larr; Back to Paths</button>`;
+        html += '<div class="topic-title-row">';
+        html += `<div><h2>${escapeHtml(data.title)}</h2><div class="meta"><span>${data.completed_lesson_count}/${data.lesson_count} lessons</span><span>${escapeHtml(data.status.replace("_", " "))}</span></div></div>`;
+        html += `<button class="action-btn primary" onclick="ChatPanel.sendFromButton('Help me learn ${escapeAttribute(data.title)}')">Ask tutor</button>`;
+        html += '</div>';
+
+        if (data.warnings && data.warnings.length > 0) {
+            html += '<div class="warning-strip">';
+            data.warnings.forEach((warning) => {
+                html += `<div>${escapeHtml(warning.message)}</div>`;
+            });
+            html += '</div>';
+        }
+
+        html += `<div class="overview-card"><h3>Goal</h3><p>${escapeHtml(data.description)}</p></div>`;
+        if (data.objectives && data.objectives.length) {
+            html += '<div class="overview-card"><h3>Objectives</h3><ul class="lesson-list">';
+            data.objectives.forEach((objective) => {
+                html += `<li>${escapeHtml(objective)}</li>`;
+            });
+            html += '</ul></div>';
+        }
+
+        html += '<div class="lesson-stack">';
+        (data.lessons || []).forEach((lesson, index) => {
+            html += renderLessonCard(data.id, lesson, index + 1);
+        });
+        html += '</div></div>';
+        container.innerHTML = html;
+        ChatPanel.updateDefaultSuggestions();
+    } catch (error) {
+        container.innerHTML = `<div class="error-card"><p>Error loading path: ${escapeHtml(error.message)}</p><button class="back-btn" onclick="navigate('#paths')">&larr; Back to Paths</button></div>`;
+    }
+}
+
+function renderLessonCard(pathId, lesson, number) {
+    const citation = (lesson.citations || [])[0];
+    const topicButton = citation?.node_id
+        ? `<button class="action-btn" onclick="event.stopPropagation(); navigate('#topics/${encodeURIComponent(citation.node_id)}')">Open topic</button>`
+        : "";
+    const sourceButton = citation?.path
+        ? `<button class="action-btn" onclick="event.stopPropagation(); openSourceSnippet('${escapeAttribute(citation.path)}', ${citation.line_start || 0}, ${citation.line_end || 0})">Open source</button>`
+        : "";
+    return `<div class="lesson-card ${lesson.completed ? "completed" : ""}">
+        <div class="lesson-card-head">
+            <div>
+                <div class="lesson-kicker">Lesson ${number}</div>
+                <h3>${escapeHtml(lesson.title)}</h3>
+            </div>
+            <span class="status-pill ${lesson.completed ? "completed" : "not_started"}">${lesson.completed ? "completed" : "open"}</span>
+        </div>
+        <p>${escapeHtml(lesson.summary)}</p>
+        <p>${escapeHtml(lesson.explanation)}</p>
+        ${renderLessonConcepts(lesson.key_concepts || [])}
+        <div class="action-buttons">
+            <button class="action-btn primary" onclick="completeLesson('${escapeAttribute(pathId)}', '${escapeAttribute(lesson.id)}')">${lesson.completed ? "Completed" : "Mark Complete"}</button>
+            ${topicButton}
+            ${sourceButton}
+        </div>
+    </div>`;
+}
+
+function renderLessonConcepts(concepts) {
+    if (!concepts.length) return "";
+    let html = '<div class="tags lesson-tags">';
+    concepts.forEach((concept) => {
+        html += `<span class="tag">${escapeHtml(concept)}</span>`;
+    });
+    html += '</div>';
+    return html;
+}
+
+async function completeLesson(pathId, lessonId) {
+    try {
+        await apiPost(`/api/learning/paths/${encodeURIComponent(pathId)}/lessons/${encodeURIComponent(lessonId)}/complete`);
+        const route = parseHash();
+        if (route.view === "path-detail") {
+            renderPathDetail(document.getElementById("main-content"), pathId);
+        }
+    } catch (error) {
+        const container = document.getElementById("main-content");
+        container.insertAdjacentHTML("afterbegin", `<div class="error-card"><p>Error completing lesson: ${escapeHtml(error.message)}</p></div>`);
     }
 }
 
@@ -944,6 +1114,16 @@ const ChatPanel = {
                 "Repo này làm gì?",
                 "Module nào quan trọng nhất?",
                 "Flow chính của dự án?",
+            ],
+            paths: [
+                "Which path should I learn first?",
+                "Summarize this learning path",
+                "What should I open next?",
+            ],
+            "path-detail": [
+                "Explain this lesson more simply",
+                "Which source should I inspect first?",
+                "What is the next step?",
             ],
             features: [
                 "Feature này giải quyết vấn đề gì?",
